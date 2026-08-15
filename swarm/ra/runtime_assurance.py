@@ -26,7 +26,7 @@ class FilterResult:
     predicted_margin: float
     time_to_min_margin: float
     time_to_safety_boundary: float | None
-    prediction_confidence: float
+    prediction_reliability_score: float
     recovery_buffer: float | None
     semantic_recovery_feasible: bool
     degradation: float
@@ -136,7 +136,7 @@ class RuntimeAssurance:
                     worst_pred_rho = pred.rho_min_pred
                     worst_pred_tau = pred.tau_star
                     worst_ttsb = pred.ttsb
-                    worst_confidence = pred.confidence
+                    worst_confidence = pred.reliability_score
 
             u_safe = project_safe_action(u_nom, constraints, self.v_max)
             intervened = bool(np.linalg.norm(u_safe - u_nom) > 1e-6)
@@ -157,7 +157,7 @@ class RuntimeAssurance:
                 predicted_margin=float(worst_pred_rho),
                 time_to_min_margin=float(worst_pred_tau),
                 time_to_safety_boundary=worst_ttsb,
-                prediction_confidence=float(worst_confidence),
+                prediction_reliability_score=float(worst_confidence),
                 recovery_buffer=(
                     worst_ttsb - self.params.estimated_recovery_latency
                     if worst_ttsb is not None

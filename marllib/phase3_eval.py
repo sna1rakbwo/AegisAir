@@ -49,7 +49,7 @@ def evaluate(trajs, scenario, params):
     horizon = params.prediction_horizon
     margin_errors = []
     ttsb_errors = []
-    rows = []  # (rho_pred, actual_rho, ttsb, confidence)
+    rows = []  # (rho_pred, actual_rho, ttsb, reliability_score)
     for positions, velocities in trajs:
         mon = PredictiveMonitor(use_ca=True, q_pred=params.q_pred)
         for t in range(len(positions) - 1):
@@ -83,7 +83,7 @@ def evaluate(trajs, scenario, params):
                     margin_errors.append(abs(pred.rho_min_pred - best))
                     if pred.ttsb is not None and actual_ttsb is not None:
                         ttsb_errors.append(abs(pred.ttsb - actual_ttsb))
-                    rows.append((pred.rho_min_pred, best, pred.ttsb, pred.confidence))
+                    rows.append((pred.rho_min_pred, best, pred.ttsb, pred.reliability_score))
     return rows, margin_errors, ttsb_errors
 
 
@@ -146,7 +146,7 @@ def main() -> int:
         reliability.append({
             "bin": f"{lo:.1f}-{hi:.1f}",
             "n": len(bin_rows),
-            "mean_confidence": float(np.mean([c for _, _, _, c in bin_rows])),
+            "mean_reliability": float(np.mean([c for _, _, _, c in bin_rows])),
             "margin_mae": float(np.mean(errs)),
         })
 

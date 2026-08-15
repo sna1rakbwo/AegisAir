@@ -5,7 +5,7 @@ Implements the plan's P0-P2 core:
       prediction;
     - future covariance growth with horizon;
     - future dynamic safety boundary and future normalized margin;
-    - rho_min_pred, tau*, TTSB, and a heuristic prediction confidence.
+    - rho_min_pred, tau*, TTSB, and a heuristic reliability score.
 
 Prediction is advisory only; hard safety remains with the CBF filter.
 """
@@ -81,7 +81,7 @@ class PredictionResult:
     ttsb: float | None
     predicted_min_distance: float
     predicted_safe_distance: float
-    confidence: float
+    reliability_score: float
 
 
 class AccelerationFilter:
@@ -218,7 +218,8 @@ class PredictiveMonitor:
                 ttsb = tau
 
         sigma_a = max(self._acc_filter(agent_i).variability(), self._acc_filter(agent_j).variability())
-        confidence = math.exp(
+        # Heuristic reliability indicator, NOT a calibrated probability.
+        reliability_score = math.exp(
             -0.2 * best_tau
             - 0.5 * sigma_a
             - 0.5 * aoi
@@ -231,5 +232,5 @@ class PredictiveMonitor:
             ttsb=ttsb,
             predicted_min_distance=best_distance,
             predicted_safe_distance=best_d_safe,
-            confidence=confidence,
+            reliability_score=reliability_score,
         )
