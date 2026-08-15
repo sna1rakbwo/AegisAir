@@ -1,0 +1,84 @@
+{
+  "protocol_id": "safedrones-px4-adapter-p5-local-v1",
+  "frozen": true,
+  "seeds": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+  "duration_ms": 6000,
+  "command_interval_ms": 500,
+  "command_mix": ["arm", "takeoff", "move_to", "hold", "land"],
+  "invalid_target_rate": 0.1,
+  "safety_limits": {
+    "command_ttl_sec": 1.0,
+    "telemetry_stale_sec": 1.5,
+    "max_horizontal_speed_mps": 3.0,
+    "max_vertical_speed_mps": 2.0,
+    "min_altitude_m": 0.0,
+    "max_altitude_m": 10.0,
+    "max_position_distance_m": 30.0,
+    "fail_closed_action": "LAND"
+  },
+  "faults": [
+    {
+      "id": "NONE",
+      "command_loss_rate": 0.0,
+      "command_latency_ms": 0,
+      "telemetry_stale_at_ms": null,
+      "gcs_lost_at_ms": null
+    },
+    {
+      "id": "COMMAND_LOSS_10",
+      "command_loss_rate": 0.10,
+      "command_latency_ms": 0,
+      "telemetry_stale_at_ms": null,
+      "gcs_lost_at_ms": null
+    },
+    {
+      "id": "COMMAND_LOSS_20",
+      "command_loss_rate": 0.20,
+      "command_latency_ms": 0,
+      "telemetry_stale_at_ms": null,
+      "gcs_lost_at_ms": null
+    },
+    {
+      "id": "COMMAND_LOSS_30",
+      "command_loss_rate": 0.30,
+      "command_latency_ms": 0,
+      "telemetry_stale_at_ms": null,
+      "gcs_lost_at_ms": null
+    },
+    {
+      "id": "COMMAND_LATENCY_100MS",
+      "command_loss_rate": 0.0,
+      "command_latency_ms": 100,
+      "telemetry_stale_at_ms": null,
+      "gcs_lost_at_ms": null
+    },
+    {
+      "id": "COMMAND_LATENCY_1100MS",
+      "command_loss_rate": 0.0,
+      "command_latency_ms": 1100,
+      "telemetry_stale_at_ms": null,
+      "gcs_lost_at_ms": null
+    },
+    {
+      "id": "TELEMETRY_STALE",
+      "command_loss_rate": 0.0,
+      "command_latency_ms": 0,
+      "telemetry_stale_at_ms": 3000,
+      "gcs_lost_at_ms": null
+    },
+    {
+      "id": "GCS_CONNECTION_LOST",
+      "command_loss_rate": 0.0,
+      "command_latency_ms": 0,
+      "telemetry_stale_at_ms": null,
+      "gcs_lost_at_ms": 3000
+    },
+    {
+      "id": "OFFBOARD_LOSS",
+      "command_loss_rate": 0.0,
+      "command_latency_ms": 0,
+      "telemetry_stale_at_ms": 3000,
+      "gcs_lost_at_ms": null
+    }
+  ]
+}

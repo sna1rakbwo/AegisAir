@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+
+# Training/runtime artifacts (kept on the external drive, not in git)
+*.pt
+*.jsonl
+checkpoints/
+metrics.jsonl
+logs/
+.run_logs/
+
+# Secrets
+deepseek_api_key
+*.key
+
+# OS
+.DS_Store

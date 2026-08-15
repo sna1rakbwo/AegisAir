@@ -1,0 +1,44 @@
+{
+  "additionalProperties": false,
+  "description": "Nominal MARL command for one agent.\n\nv1 is 2D fixed-altitude velocity control ``[vx_cmd, vy_cmd]``.  Moving to\n3D velocity command is a schema_version bump, not a silent field change.",
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "agent_id": {
+      "minimum": 0,
+      "title": "Agent Id",
+      "type": "integer"
+    },
+    "velocity_cmd": {
+      "description": "Commanded FLU velocity [vx, vy] in m/s",
+      "maxItems": 2,
+      "minItems": 2,
+      "prefixItems": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        }
+      ],
+      "title": "Velocity Cmd",
+      "type": "array"
+    },
+    "timestamp_ms": {
+      "minimum": 0,
+      "title": "Timestamp Ms",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "agent_id",
+    "velocity_cmd",
+    "timestamp_ms"
+  ],
+  "title": "MarlAction",
+  "type": "object"
+}

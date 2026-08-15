@@ -1,0 +1,100 @@
+{
+  "additionalProperties": false,
+  "description": "Minimally-invasive safety-filter result for one agent.",
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "drone": {
+      "minimum": 0,
+      "title": "Drone",
+      "type": "integer"
+    },
+    "mode": {
+      "enum": [
+        "normal",
+        "warning",
+        "override"
+      ],
+      "title": "Mode",
+      "type": "string"
+    },
+    "nominal_action": {
+      "description": "MARL nominal action u_nom",
+      "maxItems": 2,
+      "minItems": 2,
+      "prefixItems": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        }
+      ],
+      "title": "Nominal Action",
+      "type": "array"
+    },
+    "safe_action": {
+      "description": "Filtered safe action u_safe",
+      "maxItems": 2,
+      "minItems": 2,
+      "prefixItems": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        }
+      ],
+      "title": "Safe Action",
+      "type": "array"
+    },
+    "safety_margin": {
+      "description": "Normalized safety margin rho",
+      "title": "Safety Margin",
+      "type": "number"
+    },
+    "predicted_margin": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Predicted Margin"
+    },
+    "reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reason"
+    },
+    "timestamp_ms": {
+      "minimum": 0,
+      "title": "Timestamp Ms",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "drone",
+    "mode",
+    "nominal_action",
+    "safe_action",
+    "safety_margin",
+    "timestamp_ms"
+  ],
+  "title": "SafetyDecision",
+  "type": "object"
+}

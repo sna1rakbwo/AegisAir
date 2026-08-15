@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "drone": 2,
+  "position": [1.0, -0.2, 1.5],
+  "velocity": [0.8, 0.0, 0.0],
+  "yaw_deg": 0.0,
+  "status": "armed",
+  "armed": true,
+  "nav_state": 14,
+  "failsafe": false,
+  "connection_lost": false,
+  "source_frame": "FLU",
+  "source_timestamp_us": 1786728517875415,
+  "timestamp_ms": 1786728517875
+}

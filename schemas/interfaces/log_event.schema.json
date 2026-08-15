@@ -1,0 +1,55 @@
+{
+  "additionalProperties": false,
+  "description": "One line of the append-only JSONL episode log.",
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "event_type": {
+      "enum": [
+        "episode_meta",
+        "telemetry",
+        "observation",
+        "marl_action",
+        "safety_decision",
+        "risk_event",
+        "recovery_plan",
+        "fault_injection"
+      ],
+      "title": "Event Type",
+      "type": "string"
+    },
+    "timestamp_ms": {
+      "minimum": 0,
+      "title": "Timestamp Ms",
+      "type": "integer"
+    },
+    "seed": {
+      "title": "Seed",
+      "type": "integer"
+    },
+    "episode_id": {
+      "minLength": 1,
+      "title": "Episode Id",
+      "type": "string"
+    },
+    "payload": {
+      "additionalProperties": true,
+      "description": "Payload matching the schema named by ``event_type``",
+      "title": "Payload",
+      "type": "object"
+    }
+  },
+  "required": [
+    "event_type",
+    "timestamp_ms",
+    "seed",
+    "episode_id",
+    "payload"
+  ],
+  "title": "LogEvent",
+  "type": "object"
+}

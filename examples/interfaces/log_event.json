@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "event_type": "risk_event",
+  "timestamp_ms": 1786728517875,
+  "seed": 1,
+  "episode_id": "head_on_seed1",
+  "payload": {
+    "event": "PREDICTED_CONFLICT",
+    "agent_i": 2,
+    "agent_j": 4,
+    "current_margin": 0.72,
+    "predicted_min_margin": -0.18,
+    "time_to_min_margin_s": 1.43,
+    "cause": "TRAJECTORY_CONFLICT",
+    "severity": "HIGH",
+    "timestamp_ms": 1786728517875
+  }
+}

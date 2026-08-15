@@ -1,0 +1,44 @@
+# SafeDrones -> PX4 adapter runtime configuration.
+# This file must be treated as an immutable protocol input for any formal run.
+# Values are intentionally explicit rather than inferred from variable names.
+
+instance_id: 2
+
+ros:
+  namespace_prefix: "/px4_2/fmu"
+  input:
+    vehicle_local_position: "/px4_2/fmu/out/vehicle_local_position"
+    vehicle_status: "/px4_2/fmu/out/vehicle_status_v1"
+    vehicle_attitude: "/px4_2/fmu/out/vehicle_attitude"
+  output:
+    offboard_control_mode: "/px4_2/fmu/in/offboard_control_mode"
+    trajectory_setpoint: "/px4_2/fmu/in/trajectory_setpoint"
+    vehicle_command: "/px4_2/fmu/in/vehicle_command"
+
+mqtt:
+  host: "127.0.0.1"
+  port: 1883
+  qos: 0
+  base_topic: "px4"
+
+telemetry:
+  publish_rate_hz: 10.0
+  source_frame: "PX4_NED"
+
+safety:
+  command_ttl_sec: 1.0
+  telemetry_stale_sec: 1.5
+  max_horizontal_speed_mps: 3.0
+  max_vertical_speed_mps: 2.0
+  min_altitude_m: 0.0
+  max_altitude_m: 10.0
+  max_position_distance_m: 30.0
+  fail_closed_action: "LAND"
+
+control:
+  read_only: true
+  takeoff_altitude_m: 2.5
+  target_system: 3
+  target_component: 1
+  source_system: 1
+  source_component: 1
