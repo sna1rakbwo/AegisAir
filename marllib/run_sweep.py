@@ -1,6 +1,6 @@
 """Batch driver for the Phase 1 MARL curriculum sweep.
 
-Runs ``train.py`` for every (scenario, seed) combination, skips combinations
+Runs ``train_vec.py`` for every (scenario, seed) combination, skips combinations
 whose ``final.pt`` already exists, and appends a compact progress record to a
 sweep log on the external drive.
 """
@@ -24,22 +24,44 @@ from marllib.config import default_curriculum
 
 DEFAULT_OUTPUT = "/Volumes/Expansion/safedrones_marllib"
 
+STEPS_BY_SCENARIO = {
+    "single_uav": 300_000,
+    "head_on": 2_000_000,
+    "perpendicular": 2_000_000,
+    "diagonal": 2_000_000,
+    "randomized_2": 2_000_000,
+    "randomized_4": 3_000_000,
+    "randomized_8": 4_000_000,
+}
+
 
 def finished(output_root: Path, scenario: str, seed: int, domain_randomize: bool) -> bool:
     suffix = "_dr" if domain_randomize else ""
     return (output_root / f"{scenario}{suffix}" / f"seed{seed}" / "checkpoints" / "final.pt").exists()
 
 
-def run_one(output_root: Path, scenario: str, seed: int, total_steps: int, domain_randomize: bool) -> bool:
+def run_one(
+    output_root: Path,
+    scenario: str,
+    seed: int,
+    total_steps: int,
+    domain_randomize: bool,
+    num_envs: int,
+    device: str,
+) -> bool:
     cmd = [
             sys.executable,
-            str(ROOT / "marllib" / "train.py"),
+            str(ROOT / "marllib" / "train_vec.py"),
             "--scenario",
             scenario,
             "--seed",
             str(seed),
             "--total-steps",
             str(total_steps),
+            "--num-envs",
+            str(num_envs),
+            "--device",
+            device,
             "--output",
             str(output_root),
         ]
@@ -57,7 +79,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run the Phase 1 MARL curriculum sweep")
     parser.add_argument("--scenarios", default=None, help="comma-separated; default full curriculum")
     parser.add_argument("--seeds", default="1,2,3,4,5")
-    parser.add_argument("--steps", type=int, default=1_000_000)
+    parser.add_argument("--steps", type=int, default=None, help="override per-scenario default")
+    parser.add_argument("--num-envs", type=int, default=64)
+    parser.add_argument("--device", default="auto")
     parser.add_argument("--output", default=DEFAULT_OUTPUT)
     parser.add_argument("--domain-randomize", action="store_true")
     args = parser.parse_args()
@@ -84,12 +108,17 @@ def main() -> int:
                 continue
             print(f"RUN  {scenario.name} seed {seed}", flush=True)
             t0 = time.time()
-            ok = run_one(output_root, scenario.name, seed, args.steps, args.domain_randomize)
+            device = args.device
+            if device == "auto":
+                import torch
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+            total_steps = args.steps or STEPS_BY_SCENARIO.get(scenario.name, 2_000_000)
+            ok = run_one(output_root, scenario.name, seed, total_steps, args.domain_randomize, args.num_envs, device)
             elapsed = time.time() - t0
             record = {
                 "scenario": scenario.name,
                 "seed": seed,
-                "steps": args.steps,
+                "steps": total_steps,
                 "domain_randomize": args.domain_randomize,
                 "ok": ok,
                 "elapsed_s": round(elapsed, 1),

@@ -74,8 +74,8 @@ class MappoConfig:
     value_coef: float = 0.5
     entropy_coef: float = 0.01
     max_grad_norm: float = 0.5
-    epochs: int = 10
-    minibatch_size: int = 64
+    epochs: int = 5
+    minibatch_size: int = 256
     rollout_steps: int = 2048
     hidden: int = 128
 
