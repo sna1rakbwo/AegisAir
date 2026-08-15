@@ -196,7 +196,14 @@ class PredictiveMonitor:
                 sigma_sq_j = sigma_j**2 + self.q_pred * tau
                 m_perc = params.beta * math.sqrt(sigma_sq_i + sigma_sq_j)
                 m_dyn = v_cl * params.tau_r + v_cl**2 / (2.0 * params.a_eff)
-                m_comm = params.v_max * (aoi + tau) + 0.5 * params.a_max * (aoi + tau) ** 2
+                # Communication margin only grows when the link is actually
+                # stale.  With healthy telemetry (AoI == 0) the worst-case
+                # "no new telemetry" growth is far too conservative.
+                if aoi > 0:
+                    future_aoi = aoi + tau
+                    m_comm = params.v_max * future_aoi + 0.5 * params.a_max * future_aoi**2
+                else:
+                    m_comm = 0.0
                 d_safe_hat = params.d0 + m_dyn + m_perc + m_comm
 
                 rho_hat = (distance - d_safe_hat) / d_safe_hat
