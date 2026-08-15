@@ -34,7 +34,7 @@ class ScenarioConfig:
     dt: float = 0.1
     collision_radius: float = 0.25
     near_radius: float = 0.8
-    goal_epsilon: float = 0.3
+    goal_epsilon: float = 0.5
     max_neighbors: int = 8
     random_start_goal: bool = False
     # Domain randomization overrides applied by the env at reset.
