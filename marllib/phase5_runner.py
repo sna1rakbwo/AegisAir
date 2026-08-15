@@ -528,7 +528,12 @@ def run_mqtt_loop(
     port: int,
     max_steps: int,
 ) -> dict[str, Any]:
-    """Best-effort live loop. Not part of the deterministic first gate."""
+    """Live PX4 loop: arm/takeoff, then RA-filtered closed-loop control.
+
+    ``arm``/``takeoff``/``land`` use the adapter-native ``px4/{id}/command``
+    topic; the continuous ``move_to`` stream uses ``swarm/drone/{id}/command``
+    with FLU coordinates, matching the frozen adapter contract.
+    """
     try:
         import paho.mqtt.client as mqtt
     except ModuleNotFoundError as exc:
@@ -546,7 +551,32 @@ def run_mqtt_loop(
     )
     overrides = RecoveryOverrides()
     telemetry: dict[int, DroneSnapshot] = {}
-    stop = {"now": False}
+
+    def publish(
+        drone: int,
+        action: str,
+        *,
+        target: tuple[float, float, float] | None = None,
+        altitude_m: float | None = None,
+        native: bool = False,
+        priority: str = "normal",
+    ) -> None:
+        payload: dict[str, Any] = {
+            "drone": drone,
+            "action": action,
+            "ttl_sec": COMMAND_TTL_S,
+            "command_id": f"phase5-{action}-{drone}-{int(time.time_ns() // 1_000_000)}",
+            "timestamp_ms": int(time.time_ns() // 1_000_000),
+            "source_frame": "PX4_NED" if native else "FLU",
+            "priority": priority,
+        }
+        if target is not None:
+            payload["target"] = list(target)
+            payload["waypoint"] = list(target)
+        if altitude_m is not None:
+            payload["altitude_m"] = altitude_m
+        topic = f"px4/{drone}/command" if native else f"swarm/drone/{drone}/command"
+        client.publish(topic, json.dumps(payload, separators=(",", ":")))
 
     def on_connect(client, userdata, flags, reason_code, properties=None):
         client.subscribe("swarm/drone/+/telemetry")
@@ -574,9 +604,31 @@ def run_mqtt_loop(
         if not all(i in telemetry for i in drone_ids):
             raise SystemExit("telemetry not ready for all drones")
 
+        # Arm, then takeoff to the frozen cruise altitude.
+        arm_deadline = time.time() + 30.0
+        while time.time() < arm_deadline and not all(
+            telemetry.get(i) is not None and telemetry[i].status == "armed"
+            for i in drone_ids
+        ):
+            for i in drone_ids:
+                publish(i, "arm", native=True)
+            time.sleep(0.5)
+
+        takeoff_deadline = time.time() + 30.0
+        while time.time() < takeoff_deadline and not all(
+            telemetry.get(i) is not None
+            and telemetry[i].position[2] > CRUISE_ALTITUDE_M * 0.5
+            for i in drone_ids
+        ):
+            for i in drone_ids:
+                publish(i, "takeoff", altitude_m=CRUISE_ALTITUDE_M, native=True)
+            time.sleep(0.5)
+
         start = time.monotonic()
         step = 0
-        while step < max_steps and not stop["now"]:
+        cbf_events = 0
+        min_dist: float | None = None
+        while step < max_steps:
             t = time.monotonic() - start
             timestamp_ms = int(time.time_ns() // 1_000_000)
             snapshots = {i: telemetry[i] for i in drone_ids if i in telemetry}
@@ -599,7 +651,31 @@ def run_mqtt_loop(
                 )
                 nominal[i] = nominal[i] * overrides.velocity_scale.get(i, 1.0)
 
-            results = ra.filter(snapshots, nominal, t=t)
+            # The CBF boundary grows with the age of the telemetry used for
+            # filtering.  Feed the measured round-trip age instead of assuming
+            # zero latency, otherwise the live PX4 position-control loop can
+            # close faster than the lightweight point-mass simulation.
+            ages = {
+                i: max(0.0, (timestamp_ms - snapshots[i].timestamp_ms) / 1000.0)
+                for i in drone_ids
+            }
+            aoi = {
+                (i, j): max(ages[i], ages[j])
+                for i in drone_ids
+                for j in drone_ids
+                if i != j
+            }
+            results = ra.filter(snapshots, nominal, t=t, aoi=aoi)
+            cbf_events += sum(1 for r in results.values() if r.intervened)
+            positions = [snapshots[i].position for i in drone_ids]
+            for a in range(len(positions)):
+                for b in range(a + 1, len(positions)):
+                    dist = math.hypot(
+                        positions[a][0] - positions[b][0],
+                        positions[a][1] - positions[b][1],
+                        positions[a][2] - positions[b][2],
+                    )
+                    min_dist = dist if min_dist is None else min(min_dist, dist)
             if replanner is not None:
                 current_goals = {
                     i: overrides.goal_override.get(i, base_goals[i])
@@ -621,19 +697,47 @@ def run_mqtt_loop(
                     timestamp_ms=timestamp_ms,
                     priority=overrides.priority.get(i, "normal"),
                 )
-                client.publish(
-                    f"swarm/drone/{i}/command",
-                    json.dumps(command, separators=(",", ":")),
+                publish(
+                    i,
+                    command["action"],
+                    target=tuple(command["target"]),
+                    native=False,
+                    priority=command["priority"],
                 )
             step += 1
             time.sleep(0.1)
+
+        final_positions = {
+            i: list(snapshots[i].position) for i in drone_ids if i in snapshots
+        }
+        for i in drone_ids:
+            publish(i, "land", native=True)
+        time.sleep(2.0)
     finally:
         client.loop_stop()
         client.disconnect()
         if replanner is not None:
             replanner.shutdown()
 
-    return {"steps": step, "mode": mode}
+    return {
+        "steps": step,
+        "mode": mode,
+        "drone_ids": drone_ids,
+        "cbf_events": cbf_events,
+        "min_distance_m": round(min_dist, 4) if min_dist is not None else None,
+        "final_positions": final_positions,
+        "counters": (
+            {
+                "triggers": replanner.counters.triggers,
+                "plans_committed": replanner.counters.plans_committed,
+                "llm_plans_committed": replanner.counters.llm_plans_committed,
+                "fallback_plans_committed": replanner.counters.fallback_plans_committed,
+                "mission_changes": replanner.counters.mission_changes,
+            }
+            if replanner is not None
+            else None
+        ),
+    }
 
 
 def main() -> int:
@@ -650,6 +754,11 @@ def main() -> int:
     parser.add_argument("--max-steps", type=int, default=120)
     parser.add_argument("--real-time", action="store_true")
     parser.add_argument("--mqtt", action="store_true")
+    parser.add_argument(
+        "--drone-ids",
+        default="2,3",
+        help="Comma-separated PX4 instance ids for live MQTT mode.",
+    )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=1883)
     args = parser.parse_args()
@@ -668,10 +777,15 @@ def main() -> int:
 
     if args.mqtt:
         scenario: ScenarioConfig = spec["scenario"]
-        drone_ids = list(range(scenario.num_agents))
+        drone_ids = [int(v) for v in args.drone_ids.split(",") if v != ""]
+        if len(drone_ids) != scenario.num_agents:
+            raise SystemExit(
+                f"--drone-ids count {len(drone_ids)} != scenario agents "
+                f"{scenario.num_agents}"
+            )
         base_goals = {
-            i: (float(g[0]), float(g[1]), CRUISE_ALTITUDE_M)
-            for i, g in zip(drone_ids, scenario.goals)
+            drone: (float(g[0]), float(g[1]), CRUISE_ALTITUDE_M)
+            for drone, g in zip(drone_ids, scenario.goals)
         }
         result = run_mqtt_loop(
             drone_ids=drone_ids,

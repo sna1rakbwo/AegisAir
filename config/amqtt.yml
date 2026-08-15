@@ -1,10 +1,15 @@
+# Phase 5 local MQTT broker configuration.
+#
+# The adapter runs inside a Docker container and reaches this broker through
+# ``host.docker.internal`` (192.168.65.254 on Docker Desktop).  Binding only to
+# 127.0.0.1 would make the host loopback listener unreachable from the
+# container, so the dev broker listens on all interfaces for this live gate.
 listeners:
   default:
     type: tcp
-    bind: 127.0.0.1:1883
+    bind: 0.0.0.0:1883
 sys_interval: 10
 auth:
   allow-anonymous: true
 topic-check:
   enabled: false
-
