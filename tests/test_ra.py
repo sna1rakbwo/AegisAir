@@ -15,6 +15,7 @@ from swarm.ra.margins import (
     dynamic_safety_boundary,
 )
 from swarm.ra.runtime_assurance import RuntimeAssurance
+from swarm.ra.predictor import closest_point_of_approach, predicted_distance, predicted_min_margin
 
 
 class MarginsTest(unittest.TestCase):
@@ -65,6 +66,37 @@ class CbfTest(unittest.TestCase):
         self.assertGreaterEqual(np.dot(a, u) + 1e-9, b)
 
 
+class PredictorTest(unittest.TestCase):
+    def test_predicted_distance_head_on(self) -> None:
+        # Two agents 4 m apart closing at 2 m/s: after 1 s they are 2 m apart.
+        d = predicted_distance(
+            (-2.0, 0.0, 0.0), (2.0, 0.0, 0.0),
+            (1.0, 0.0, 0.0), (-1.0, 0.0, 0.0),
+            1.0,
+        )
+        self.assertAlmostEqual(d, 2.0)
+
+    def test_cpa_head_on(self) -> None:
+        cpa = closest_point_of_approach(
+            (-2.0, 0.0, 0.0), (2.0, 0.0, 0.0),
+            (1.0, 0.0, 0.0), (-1.0, 0.0, 0.0),
+            horizon=5.0,
+        )
+        self.assertAlmostEqual(cpa.d_cpa, 0.0)
+        self.assertAlmostEqual(cpa.t_cpa, 2.0)
+
+    def test_predicted_margin_negative_head_on(self) -> None:
+        rho_hat, tau = predicted_min_margin(
+            p_i=(-2.0, 0.0, 0.0),
+            p_j=(2.0, 0.0, 0.0),
+            v_i=(1.0, 0.0, 0.0),
+            v_j=(-1.0, 0.0, 0.0),
+            d_safe=1.0,
+            horizon=3.0,
+        )
+        self.assertLess(rho_hat, 0.0)
+
+
 class RuntimeAssuranceTest(unittest.TestCase):
     def _snapshot(self, drone_id, position, velocity):
         from swarm.safety import DroneSnapshot
@@ -94,6 +126,17 @@ class RuntimeAssuranceTest(unittest.TestCase):
         results = ra.filter(snapshots, nominal, t=0.0)
         self.assertEqual(results[1].mode, "normal")
         self.assertFalse(results[1].intervened)
+
+    def test_head_on_is_proactive(self) -> None:
+        ra = RuntimeAssurance()
+        snapshots = {
+            1: self._snapshot(1, (-2.0, 0.0, 0.0), (1.0, 0.0, 0.0)),
+            2: self._snapshot(2, (2.0, 0.0, 0.0), (-1.0, 0.0, 0.0)),
+        }
+        nominal = {1: np.array([1.0, 0.0]), 2: np.array([-1.0, 0.0])}
+        results = ra.filter(snapshots, nominal, t=0.0)
+        self.assertTrue(results[1].proactive)
+        self.assertLess(results[1].predicted_margin, 0.0)
 
 
 if __name__ == "__main__":

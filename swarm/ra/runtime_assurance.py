@@ -13,6 +13,7 @@ from swarm.ra.margins import (
     closing_speed,
     dynamic_safety_boundary,
 )
+from swarm.ra.predictor import predicted_min_margin
 
 
 @dataclass
@@ -22,9 +23,12 @@ class FilterResult:
     nominal_action: tuple[float, float]
     safe_action: tuple[float, float]
     safety_margin: float
+    predicted_margin: float
+    time_to_min_margin: float
     degradation: float
     worst_pair: int | None
     intervened: bool
+    proactive: bool
 
 
 class RuntimeAssurance:
@@ -68,6 +72,8 @@ class RuntimeAssurance:
             worst_rho = float("inf")
             worst_g = 0.0
             worst_pair: int | None = None
+            worst_pred_rho = float("inf")
+            worst_pred_tau = 0.0
 
             for other_id, other in snapshots.items():
                 if other_id == drone_id:
@@ -97,6 +103,18 @@ class RuntimeAssurance:
                     worst_pair = other_id
                     worst_g = g
 
+                pred_rho, pred_tau = predicted_min_margin(
+                    p_i=snapshot.position,
+                    p_j=other.position,
+                    v_i=snapshot.velocity or (0.0, 0.0, 0.0),
+                    v_j=other.velocity or (0.0, 0.0, 0.0),
+                    d_safe=d_safe,
+                    horizon=self.params.prediction_horizon,
+                )
+                if pred_rho < worst_pred_rho:
+                    worst_pred_rho = pred_rho
+                    worst_pred_tau = pred_tau
+
             u_safe = project_safe_action(u_nom, constraints, self.v_max)
             intervened = bool(np.linalg.norm(u_safe - u_nom) > 1e-6)
 
@@ -113,8 +131,11 @@ class RuntimeAssurance:
                 nominal_action=(float(u_nom[0]), float(u_nom[1])),
                 safe_action=(float(u_safe[0]), float(u_safe[1])),
                 safety_margin=float(worst_rho),
+                predicted_margin=float(worst_pred_rho),
+                time_to_min_margin=float(worst_pred_tau),
                 degradation=float(worst_g),
                 worst_pair=worst_pair,
                 intervened=intervened,
+                proactive=worst_pred_rho < self.params.rho_pred_threshold,
             )
         return results
