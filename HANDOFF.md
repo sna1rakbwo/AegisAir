@@ -44,6 +44,11 @@ swarm/
     cbf.py            time-varying CBF 速度过滤
     predictor.py      PredictiveMonitor（CV/CA/CPA/不确定性/TTSB/reliability）
     runtime_assurance.py  编排器
+  recovery/            Phase 4 语义恢复层
+    llm.py              LLMRecoveryClient + DeterministicRecoveryClient + TransformersQwenClient
+    validator.py        RecoveryPlan schema + whitelist + 禁止字段/arena/ttl 校验
+    executor.py         7 个恢复动作执行语义 + TTL
+    orchestrator.py     R0/R1/R2 三层触发 + latency budget/fallback + 指标
 marllib/              Phase 1 轻量 MARL
   config.py           场景 + 奖励配置 + 课程
   reward.py           奖励函数
@@ -58,6 +63,7 @@ marllib/              Phase 1 轻量 MARL
   eval_predictor_full.py  离线冲突检测
   phase3_calibrate.py 预测误差校准
   phase3_eval.py      margin/阈值/可靠性/可行性
+  phase4_eval.py      R0/R1/R2 语义恢复对比
   sweep_horizon.py    horizon sweep
   selective_trigger.py  persistence/CPA/event-level
   ablate_predictor.py P0-P4 ablation
@@ -66,10 +72,10 @@ schemas/              Phase 0 JSON Schema
 examples/             Phase 0 示例
 docs/interfaces/      冻结接口规范
 docs/decisions/       架构决策文档
-tests/                52 个测试
+tests/                78 个测试
 ```
 
-## 5. 当前进度（Phase 0-3 完成，Phase 4 下一步）
+## 5. 当前进度（Phase 0-4 完成，Phase 5 下一步）
 
 ### Phase 0 冻结接口（完成）
 
@@ -99,7 +105,53 @@ SafetyDecision / LogEvent。定义在 swarm/interfaces.py。
 * 关键负面结论：persistence/CPA 只能把 precision 提到约 44% 且 recall 掉到 19%；
   event-level 反而更低；prediction error heavy-tailed；confidence 不可校准。
 
+### Phase 4 本地 LLM Async Mission Replanning（完成）
+
+* 新增 `swarm/recovery/`：可替换 LLM 后端 + schema/whitelist/forbidden-field 校验
+  + 7 个恢复动作执行语义 + R0/R1/R2 三层触发编排器 + latency budget 超时兜底。
+* 默认 `DeterministicRecoveryClient` 离线可复现；真实 4-bit 走 `MlxLmClient`
+  （MLX 已装：mlx 0.32.0 + mlx-lm 0.31.3，Metal 可用）；`TransformersQwenClient`
+  的 4-bit 仍需 bitsandbytes（CUDA），本机显式失败不假装量化。
+* `marllib/phase4_eval.py` 输出 4 个核心指标：recovery latency、
+  unnecessary mission changes、CBF intervention duration、mission completion time。
+* randomized_8（20 seeds，训练 MARL seed1）：R1 产生 1132 次任务变更 / 338 次
+  无谓变更、完成率 0.80；R0/R2 完成率 0.95、CBF 介入约 9.9s，R2 预热候选平均
+  提前 0.175s。详见 `docs/decisions/phase4_recovery.md`。
+* 2026-08-15 架构重定位：LLM 定位为异步 Semantic Mission Manager，由
+  Mission Validity Monitor 触发（E_safety route deviation / E_mission 任务
+  变化 / E_coord 等待退化）。详见
+  `docs/decisions/llm_async_mission_replanning.md`。
+* 真实 `Qwen3-4B-4bit`（MLX，非 thinking）100 次基准：valid JSON 1.00，
+  TTFT P50 2.07s / generation P50 0.76s / total P50 2.83s（短 JSON）。
+  完整 `RecoveryPlan` 单次生成约 23s（含 prefill + 约 300 token 输出），
+  因此真实 LLM 是「慢但异步」，不要求赶在单次碰撞前完成。
+* LLM 输出改为「compact 高层决策」→ `MissionDecision` → 确定性展开为
+  `RecoveryPlan`，单次生成降到约 2.8s；并加入四层校验（syntactic / schema /
+  semantic / execution acceptance）。
+* 三组 mission 场景 harness：`priority_conflict` / `corridor_blocked` /
+  `drone_failure`，用 `RuleMissionPlanner`（LLM 的确定性替身）+ 异步
+  replanning 已跑通，见 `marllib/phase4_eval_missions.py`。
+* 真实 Qwen 10 seeds × 三场景（real-time）跑通：LLM 30 次调用四层校验全过、
+  fallback=0。`drone_failure` 关键任务完成率 0→1.0；`corridor_blocked`
+  zone_cross 1.0→0.0；`priority_conflict` 高优先级到达步数 92→86.6、
+  CBF 介入 72→66.2。结果写入
+  `/Volumes/Expansion/safedrones_marllib_vec/phase4_missions_results.json`。
+* Phase 4 完整总结：`docs/decisions/phase4_summary.md`。
+
 ## 6. 关键架构决策（必读）
+
+当前顶层定位（2026-08-15，见
+docs/decisions/llm_async_mission_replanning.md）：
+
+```text
+CBF / Runtime Assurance = immediate safety control（同步，当前这一刻不能撞）
+LLM = asynchronous mission-level replanning（为什么反复冲突、谁让路、谁改航路）
+Protect now -> Understand later -> Replan future
+```
+
+LLM 不抢方向盘，LLM 改路线图。LLM 触发是 Mission Validity Monitor：
+`E_replan = E_safety（route deviation）OR E_mission（任务变化）
+OR E_coord（等待/效率退化）`。
 
 见 docs/decisions/predictor_architecture.md：
 
@@ -117,22 +169,15 @@ Level 3 - Hard CBF（独立兜底）
 
 格言：Prediction suggests; Runtime evidence confirms.
 
-## 7. 下一步 Phase 4（本地 LLM Semantic Recovery）
+## 7. 下一步 Phase 5（PX4/Gazebo 闭环）
 
-按架构决策，做 R0/R1/R2 对比：
+把 Phase 4 的异步 mission-level replanning 接进 PX4 SITL/Gazebo：
 
-* R0：无预测器，runtime conflict 到 LLM 到 recovery。
-* R1：预测器直接触发 LLM 执行（预期无意义重规划多）。
-* R2：预测器 speculative planning + runtime confirmation（主方案）。
-
-具体任务：
-
-1. 本地 Qwen3-4B 部署（4-bit, non-thinking, JSON schema + 动作白名单 + 校验）。
-2. 实现三层触发：Pre-alert 到 Runtime Confirmation 到 LLM 确认后执行。
-3. 动作白名单：HOLD / YIELD / REROUTE / REASSIGN / CHANGE_PRIORITY / ABORT / RETURN。
-4. LLM 延迟预算：本地 LLM 应控制在 0.4-0.6s 内。
-5. 比较指标：recovery latency、unnecessary mission changes、CBF intervention
-   duration、mission completion time。
+1. telemetry → observation → MARL inference → Runtime Assurance → 异步 replanning →
+   PX4 Offboard 全闭环。
+2. 用已下载的 Qwen3-4B-4bit 验证 repeated CBF interventions / recurrent
+   conflict rate / mission completion time / path efficiency 是否改善。
+3. 复用 Phase 4 的 R0/R1/R2 harness 在 Gazebo 场景复测。
 
 ## 8. 重要约定
 

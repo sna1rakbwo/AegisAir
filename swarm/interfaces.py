@@ -122,6 +122,10 @@ RiskCause = Literal[
     "PERCEPTION_UNCERTAINTY",
     "COMMUNICATION_STALE",
     "TRAJECTORY_CONFLICT",
+    "REPEATED_CONFLICT",
+    "ROUTE_DEVIATION",
+    "MISSION_CHANGE",
+    "COORDINATION_DEGRADATION",
     "UNKNOWN",
 ]
 RiskSeverity = Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"]
@@ -131,7 +135,13 @@ class RiskEvent(_Frozen):
     """Structured event emitted by Runtime Assurance to the semantic layer."""
 
     schema_version: Literal[1] = 1
-    event: Literal["PREDICTED_CONFLICT", "SAFETY_MARGIN_DEGRADATION", "HARD_INTERVENTION"]
+    event: Literal[
+        "PREDICTED_CONFLICT",
+        "SAFETY_MARGIN_DEGRADATION",
+        "HARD_INTERVENTION",
+        "REPEATED_ROUTE_CONFLICT",
+        "MISSION_PLAN_INVALIDATED",
+    ]
     agent_i: int = Field(ge=0)
     agent_j: int = Field(ge=0)
     current_margin: float = Field(description="Normalized safety margin rho at capture time")
@@ -145,6 +155,10 @@ class RiskEvent(_Frozen):
         default=None, description="Safety-margin degradation rate g (reactive only)"
     )
     intervention_count: int | None = Field(default=None, ge=0)
+    mission_priority: dict[int, str] | None = Field(
+        default=None,
+        description="Optional mission-level priority map for a conflicting pair",
+    )
     cause: RiskCause
     severity: RiskSeverity
     timestamp_ms: int = Field(ge=0)
@@ -193,6 +207,19 @@ class RecoveryPlan(_Frozen):
     constraints: RecoveryConstraints | None = None
     rationale: str = ""
     timestamp_ms: int = Field(ge=0)
+
+
+class MissionDecision(_Frozen):
+    """Compact high-level decision emitted by the local LLM (System 2).
+
+    The LLM only picks the semantic action and the affected drone(s); waypoints,
+    ttl, command ids, and the full RecoveryPlan are expanded deterministically.
+    """
+
+    action: RecoveryAction
+    agent: int | None = Field(default=None, ge=0)
+    high: int | None = Field(default=None, ge=0)
+    low: int | None = Field(default=None, ge=0)
 
 
 # ---------------------------------------------------------------------------

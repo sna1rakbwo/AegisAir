@@ -232,3 +232,12 @@ class MultiUAVEnv:
                 self.goals.reshape(-1),
             ]
         ).astype(np.float32)
+
+    def set_goal(self, agent_id: int, goal: np.ndarray) -> None:
+        """Override one agent's goal (used by semantic recovery REROUTE etc.)."""
+        idx = self.agent_ids.index(agent_id)
+        goal = np.asarray(goal, dtype=np.float64)
+        self.goals[idx] = goal[:2]
+        self.prev_goal_distances[idx] = np.linalg.norm(
+            self.goals[idx] - self.positions[idx]
+        )

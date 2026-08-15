@@ -5,7 +5,7 @@
 > 目标：将当前 SafeDrones 原型发展为可复现、可系统验证、具备 SCI
 > 投稿潜力的多无人机研究系统。\
 > 核心方向：**Risk-Adaptive Runtime Assurance for LLM--MARL Multi-UAV
-> Autonomy with Predictive Safety Monitoring and Semantic Recovery**
+> Autonomy with Predictive Safety Monitoring and Async Mission-Level Replanning**
 
 ------------------------------------------------------------------------
 
@@ -18,7 +18,8 @@
 
 > **当 LLM 高层规划器和 MARL
 > 学习控制器都可能出错时，能否通过独立的风险自适应 Runtime Assurance
-> 保持多无人机硬安全，并利用安全裕度及其预测/退化信息触发有效的任务级语义恢复？**
+> 保持多无人机硬安全，并利用安全裕度及其预测/退化信息触发有效的异步任务级
+> 重规划（mission-level replanning）？**
 
 核心假设：
 
@@ -57,7 +58,7 @@ Runtime Assurance
       ↓
 Structured RiskEvent
       ↓
-Local LLM Semantic Recovery
+Local LLM Async Mission Replanning
       ↓
 New mission plan
 ```
@@ -66,8 +67,28 @@ New mission plan
 
 \[ `\boxed{
 Risk\rightarrow Margin\rightarrow Prediction\rightarrow
-Runtime\ Assurance\rightarrow Semantic\ Recovery
+Runtime\ Assurance\rightarrow Async\ Mission\ Replanning
 }`{=tex} \]
+
+职责边界（2026-08-15 冻结，见
+`docs/decisions/llm_async_mission_replanning.md`）：
+
+``` text
+CBF / Runtime Assurance = immediate safety control（同步，当前这一刻不能撞）
+LLM = Semantic Mission Manager（异步，为什么原计划不再合理、应该怎么改）
+```
+
+LLM 不抢方向盘，LLM 改路线图。核心闭环：
+
+``` text
+Protect now -> Understand later -> Replan future
+```
+
+核心句：
+
+``` text
+CBF preserves safety; the LLM preserves mission intent under changing constraints.
+```
 
 ------------------------------------------------------------------------
 
@@ -659,8 +680,16 @@ N_{int}>N_{th}
 形成：
 
 \[ `\boxed{
-Predict\rightarrow Prevent\rightarrow Protect\rightarrow Recover
+Protect\ now\rightarrow Understand\ later\rightarrow Replan\ future
 }`{=tex} \]
+
+> 2026-08-15 冻结：LLM 不再做实时避碰，单次冲突由 CBF 立即处理。LLM 由
+> Mission Validity Monitor 触发，条件是原计划在安全/任务/协调变化下不再合理：
+>
+> `E_replan = E_safety（route deviation）OR E_mission（任务/优先级/环境变化）
+> OR E_coord（等待/效率退化）`。
+>
+> 详见 `docs/decisions/llm_async_mission_replanning.md`。
 
 ------------------------------------------------------------------------
 
@@ -946,14 +975,17 @@ x^*
 
 ## LLM
 
--   TTFT；
--   total latency；
--   end-to-end recovery latency；
 -   valid JSON rate；
 -   legal action rate；
--   recovery success；
--   timeout；
--   replan count。
+-   replan count；
+-   repeated CBF interventions 是否下降；
+-   recurrent conflict rate 是否下降；
+-   mission completion time 是否改善；
+-   path efficiency 是否改善；
+-   被 CBF 持续干预（「推来推去」）时长是否下降。
+
+LLM 的评价目标是「能否解决高层 persistent safety intervention 的原因」，
+而不是「能否在 0.4s 内实时避碰」。
 
 ## Scalability
 
@@ -1042,12 +1074,12 @@ safety--efficiency tradeoff？
 staleness 下的鲁棒性如何？
 
 **RQ3**：Normalized safety-margin degradation 能否作为 deterministic
-low-level safety 与 semantic recovery 之间有效的跨层接口？
+low-level safety 与 mission-level replanning 之间有效的跨层接口？
 
 **RQ4**：Predictive safety margin 能否在 CBF hard intervention
 前提供有效 proactive recovery？
 
-**RQ5**：LLM recovery 相比 no recovery、rule-based recovery 和
+**RQ5**：LLM mission-level replanning 相比 no recovery、rule-based recovery 和
 deterministic planner 是否改善任务表现？
 
 **RQ6**：系统硬安全对 MARL policy quality 和 LLM quality
@@ -1070,10 +1102,10 @@ operating envelope 在哪里？
 利用 normalized margin 和 degradation 将连续低层安全状态转换成 semantic
 risk event。
 
-## C3 --- Predictive + Reactive Semantic Recovery
+## C3 --- Predictive + Reactive Mission-Level Replanning
 
 结合 CV/CPA short-horizon prediction 与
-degradation/intervention-triggered recovery。
+degradation/intervention-triggered mission replanning。
 
 ## C4 --- Untrusted-Autonomy Architecture
 
@@ -1150,20 +1182,20 @@ degradation、communication faults、LLM failures、OOD 与 swarm scale。
 
 ------------------------------------------------------------------------
 
-## Phase 4 --- Local LLM Recovery
+## Phase 4 --- Local LLM Async Mission Replanning
 
 1.  Qwen3-4B local；
 2.  non-thinking；
 3.  JSON schema；
 4.  whitelist；
 5.  timeout/fallback；
-6.  proactive RiskEvent；
-7.  reactive RiskEvent；
-8.  recovery execution；
+6.  Mission Validity Monitor（E_safety / E_mission / E_coord）；
+7.  async generation（不阻塞 CBF / MARL 回路）；
+8.  mission-level replanning execution；
 9.  unsafe/malformed output test。
 
-**完成标准：** LLM 能完成 semantic recovery，且错误输出无法突破 Safety
-Gate。
+**完成标准：** LLM 能异步完成 mission-level replanning，降低 persistent CBF
+intervention，且错误输出无法突破 Safety Gate。
 
 ------------------------------------------------------------------------
 

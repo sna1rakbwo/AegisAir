@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from swarm.interfaces import (
     LogEvent,
     MarlAction,
+    MissionDecision,
     Observation,
     RecoveryPlan,
     RiskEvent,
@@ -108,6 +109,46 @@ class InterfaceValidationTest(unittest.TestCase):
                     "timestamp_ms": 1,
                 }
             )
+
+    def test_repeated_route_conflict_event_validates(self) -> None:
+        event = RiskEvent.model_validate(
+            {
+                "schema_version": 1,
+                "event": "REPEATED_ROUTE_CONFLICT",
+                "agent_i": 2,
+                "agent_j": 4,
+                "current_margin": 0.3,
+                "intervention_count": 7,
+                "mission_priority": {2: "high", 4: "normal"},
+                "cause": "REPEATED_CONFLICT",
+                "severity": "HIGH",
+                "timestamp_ms": 1,
+            }
+        )
+        self.assertEqual(event.event, "REPEATED_ROUTE_CONFLICT")
+        self.assertEqual(event.cause, "REPEATED_CONFLICT")
+        self.assertEqual(event.mission_priority, {2: "high", 4: "normal"})
+
+    def test_mission_plan_invalidated_event_validates(self) -> None:
+        event = RiskEvent.model_validate(
+            {
+                "schema_version": 1,
+                "event": "MISSION_PLAN_INVALIDATED",
+                "agent_i": 3,
+                "agent_j": 3,
+                "current_margin": 0.8,
+                "cause": "ROUTE_DEVIATION",
+                "severity": "MEDIUM",
+                "timestamp_ms": 1,
+            }
+        )
+        self.assertEqual(event.event, "MISSION_PLAN_INVALIDATED")
+        self.assertEqual(event.cause, "ROUTE_DEVIATION")
+
+    def test_compact_mission_decision_validates(self) -> None:
+        decision = MissionDecision.model_validate({"action": "REASSIGN", "agent": 1})
+        self.assertEqual(decision.action, "REASSIGN")
+        self.assertEqual(decision.agent, 1)
 
 
 class JsonSchemaGenerationTest(unittest.TestCase):
