@@ -25,7 +25,7 @@ class RuntimeAssuranceParams:
     alpha: float = 1.0
     ema_lambda: float = 0.8
     degradation_dt: float = 0.1
-    prediction_horizon: float = 3.0
+    prediction_horizon: float = 1.5
     rho_pred_threshold: float = 0.0
     q_pred: float = 0.0
     estimated_recovery_latency: float = 0.5
