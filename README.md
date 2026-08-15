@@ -2,7 +2,7 @@
 
 **Adaptive Runtime Assurance for Intelligent Multi-UAV Systems**
 
-AegisAir 是从 SafeDrones 原型分离并升级后的研究系统。核心假设是 **LLM 与 MARL
+核心假设是 **LLM 与 MARL
 都不可信**，由独立的 **Risk-Adaptive Runtime Assurance** 保留最终硬安全权，并
 通过预测安全裕度与语义恢复在保证硬安全的前提下恢复任务性能。
 
