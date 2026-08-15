@@ -15,7 +15,7 @@ from typing import Any
 from px4_adapter.px4_codec import flu_to_px4_ned, px4_ned_to_flu
 
 
-VALID_ACTIONS = {"arm", "takeoff", "move_to", "land", "rtl", "hold"}
+VALID_ACTIONS = {"arm", "takeoff", "move_to", "velocity", "land", "rtl", "hold"}
 
 
 def _as_vector3(value: Any, field_name: str) -> tuple[float, float, float]:
@@ -227,6 +227,11 @@ def decode_command(
         target = _as_vector3(raw_target, "target")
         if payload.get("velocity") is not None:
             velocity = _as_vector3(payload["velocity"], "velocity")
+    elif action == "velocity":
+        raw_velocity = payload.get("velocity")
+        if raw_velocity is None:
+            raise ValueError("velocity requires a 'velocity' vector")
+        velocity = _as_vector3(raw_velocity, "velocity")
     elif action == "takeoff":
         raw_target = payload.get("target", payload.get("waypoint"))
         if raw_target is not None:

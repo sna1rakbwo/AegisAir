@@ -51,6 +51,8 @@ CRUISE_ALTITUDE_M = 2.5
 COMMAND_HORIZON_S = 0.5
 COMMAND_TTL_S = 0.5
 NOMINAL_GAIN = 1.5
+ALTITUDE_HOLD_KP = 1.0
+MAX_VERTICAL_SPEED_MPS = 1.0
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +143,37 @@ def build_phase5_command(
         "ttl_sec": ttl_sec,
         "priority": priority,
         "command_id": f"phase5-move-{drone}-{timestamp_ms}",
+        "timestamp_ms": timestamp_ms,
+    }
+
+
+def build_phase5_velocity_command(
+    *,
+    drone: int,
+    safe_velocity: np.ndarray | tuple[float, float],
+    vertical_velocity: float,
+    timestamp_ms: int,
+    priority: str = "normal",
+    ttl_sec: float = COMMAND_TTL_S,
+) -> dict[str, Any]:
+    """Encode a RA safe velocity as an adapter FLU ``velocity`` command.
+
+    PX4 Offboard interprets a ``TrajectorySetpoint`` with valid ``velocity``
+    and ``NaN`` position as a velocity setpoint.  The altitude loop supplies
+    the vertical velocity, keeping the 2D CBF semantics intact.
+    """
+    return {
+        "drone": drone,
+        "action": "velocity",
+        "velocity": [
+            float(safe_velocity[0]),
+            float(safe_velocity[1]),
+            float(vertical_velocity),
+        ],
+        "source_frame": "FLU",
+        "ttl_sec": ttl_sec,
+        "priority": priority,
+        "command_id": f"phase5-vel-{drone}-{timestamp_ms}",
         "timestamp_ms": timestamp_ms,
     }
 
@@ -527,6 +560,7 @@ def run_mqtt_loop(
     host: str,
     port: int,
     max_steps: int,
+    trajectory: Path | None = None,
 ) -> dict[str, Any]:
     """Live PX4 loop: arm/takeoff, then RA-filtered closed-loop control.
 
@@ -557,6 +591,7 @@ def run_mqtt_loop(
         action: str,
         *,
         target: tuple[float, float, float] | None = None,
+        velocity: tuple[float, float, float] | None = None,
         altitude_m: float | None = None,
         native: bool = False,
         priority: str = "normal",
@@ -573,6 +608,8 @@ def run_mqtt_loop(
         if target is not None:
             payload["target"] = list(target)
             payload["waypoint"] = list(target)
+        if velocity is not None:
+            payload["velocity"] = list(velocity)
         if altitude_m is not None:
             payload["altitude_m"] = altitude_m
         topic = f"px4/{drone}/command" if native else f"swarm/drone/{drone}/command"
@@ -628,6 +665,8 @@ def run_mqtt_loop(
         step = 0
         cbf_events = 0
         min_dist: float | None = None
+        min_rho: float | None = None
+        traj_rows: list[dict[str, Any]] = []
         while step < max_steps:
             t = time.monotonic() - start
             timestamp_ms = int(time.time_ns() // 1_000_000)
@@ -668,6 +707,7 @@ def run_mqtt_loop(
             results = ra.filter(snapshots, nominal, t=t, aoi=aoi)
             cbf_events += sum(1 for r in results.values() if r.intervened)
             positions = [snapshots[i].position for i in drone_ids]
+            step_min_dist = float("inf")
             for a in range(len(positions)):
                 for b in range(a + 1, len(positions)):
                     dist = math.hypot(
@@ -675,6 +715,7 @@ def run_mqtt_loop(
                         positions[a][1] - positions[b][1],
                         positions[a][2] - positions[b][2],
                     )
+                    step_min_dist = min(step_min_dist, dist)
                     min_dist = dist if min_dist is None else min(min_dist, dist)
             if replanner is not None:
                 current_goals = {
@@ -689,20 +730,60 @@ def run_mqtt_loop(
                     base_goals=base_goals,
                 )
 
+            step_min_rho = min(results[i].safety_margin for i in drone_ids)
+            min_rho = step_min_rho if min_rho is None else min(min_rho, step_min_rho)
+
+            step_rows: dict[int, dict[str, Any]] = {}
             for i in drone_ids:
-                command = build_phase5_command(
+                snap = snapshots[i]
+                vertical_velocity = max(
+                    -MAX_VERTICAL_SPEED_MPS,
+                    min(
+                        MAX_VERTICAL_SPEED_MPS,
+                        ALTITUDE_HOLD_KP * (CRUISE_ALTITUDE_M - snap.position[2]),
+                    ),
+                )
+                command = build_phase5_velocity_command(
                     drone=i,
                     safe_velocity=results[i].safe_action,
-                    position_flu=snapshots[i].position,
+                    vertical_velocity=vertical_velocity,
                     timestamp_ms=timestamp_ms,
                     priority=overrides.priority.get(i, "normal"),
                 )
                 publish(
                     i,
-                    command["action"],
-                    target=tuple(command["target"]),
+                    "velocity",
+                    velocity=tuple(command["velocity"]),
                     native=False,
                     priority=command["priority"],
+                )
+                if trajectory is not None:
+                    step_rows[i] = {
+                        "pos": list(snap.position),
+                        "v_actual": list(snap.velocity or (0.0, 0.0, 0.0)),
+                        "v_safe": list(command["velocity"]),
+                        "v_nom": [
+                            float(results[i].nominal_action[0]),
+                            float(results[i].nominal_action[1]),
+                            0.0,
+                        ],
+                        "rho": round(results[i].safety_margin, 6),
+                        "intervened": bool(results[i].intervened),
+                        "age_s": round(ages[i], 4),
+                    }
+
+            if trajectory is not None:
+                traj_rows.append(
+                    {
+                        "t": round(t, 4),
+                        "step": step,
+                        "min_rho": round(step_min_rho, 6),
+                        "min_distance": round(
+                            step_min_dist if step_min_dist != float("inf") else 0.0,
+                            4,
+                        ),
+                        "drones": step_rows,
+                    }
                 )
             step += 1
             time.sleep(0.1)
@@ -710,6 +791,13 @@ def run_mqtt_loop(
         final_positions = {
             i: list(snapshots[i].position) for i in drone_ids if i in snapshots
         }
+        if trajectory is not None:
+            trajectory.parent.mkdir(parents=True, exist_ok=True)
+            trajectory.write_text(
+                "\n".join(json.dumps(row, ensure_ascii=False) for row in traj_rows)
+                + "\n",
+                encoding="utf-8",
+            )
         for i in drone_ids:
             publish(i, "land", native=True)
         time.sleep(2.0)
@@ -725,7 +813,9 @@ def run_mqtt_loop(
         "drone_ids": drone_ids,
         "cbf_events": cbf_events,
         "min_distance_m": round(min_dist, 4) if min_dist is not None else None,
+        "min_rho": round(min_rho, 6) if min_rho is not None else None,
         "final_positions": final_positions,
+        "trajectory": str(trajectory) if trajectory is not None else None,
         "counters": (
             {
                 "triggers": replanner.counters.triggers,
@@ -754,6 +844,12 @@ def main() -> int:
     parser.add_argument("--max-steps", type=int, default=120)
     parser.add_argument("--real-time", action="store_true")
     parser.add_argument("--mqtt", action="store_true")
+    parser.add_argument(
+        "--trajectory",
+        type=Path,
+        default=None,
+        help="Write per-step live telemetry/RA rows to this JSONL path.",
+    )
     parser.add_argument(
         "--drone-ids",
         default="2,3",
@@ -796,6 +892,7 @@ def main() -> int:
             host=args.host,
             port=args.port,
             max_steps=args.max_steps,
+            trajectory=args.trajectory,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0

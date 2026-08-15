@@ -27,12 +27,17 @@ trap cleanup EXIT INT TERM
 
 adapter_pids=()
 for instance in $ADAPTER_INSTANCES; do
-    # shellcheck disable=SC2086
-    python3 /work/px4_adapter/node.py \
-        --config /work/px4_adapter/config.yaml \
-        --instance "$instance" ${ADAPTER_ARGS} &
+    offset_var="ORIGIN_OFFSET_${instance}"
+    offset="${!offset_var:-}"
+    args=( --config /work/px4_adapter/config.yaml --instance "$instance" )
+    # ADAPTER_ARGS is intentionally word-split here (it is a shared arg list).
+    # shellcheck disable=SC2206
+    args+=( ${ADAPTER_ARGS} )
+    if [[ -n "$offset" ]]; then
+        args+=( "--origin-offset-ned=$offset" )
+    fi
+    python3 /work/px4_adapter/node.py "${args[@]}" &
     adapter_pids+=("$!")
 done
 
-# shellcheck disable=SC2086
 wait

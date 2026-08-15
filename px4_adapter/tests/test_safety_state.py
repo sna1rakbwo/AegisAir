@@ -133,6 +133,24 @@ class SafetyStateTest(unittest.TestCase):
         self.assertFalse(decision.allowed)
         self.assertEqual(decision.reason, "horizontal_speed_out_of_limits")
 
+    def test_valid_velocity_is_allowed(self) -> None:
+        decision = LocalSafetyState(limits()).evaluate(
+            100,
+            telemetry(timestamp_ms=0),
+            command("velocity", timestamp_ms=0, velocity=(1.0, 0.5, -0.2)),
+        )
+        self.assertTrue(decision.allowed)
+        self.assertEqual(decision.state, "NORMAL")
+
+    def test_velocity_horizontal_speed_out_of_limits_is_rejected(self) -> None:
+        decision = LocalSafetyState(limits()).evaluate(
+            100,
+            telemetry(timestamp_ms=0),
+            command("velocity", timestamp_ms=0, velocity=(5.0, 0.0, 0.0)),
+        )
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.reason, "horizontal_speed_out_of_limits")
+
     def test_takeoff_altitude_out_of_limits_is_rejected(self) -> None:
         decision = LocalSafetyState(limits()).evaluate(
             100,

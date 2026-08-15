@@ -7,6 +7,7 @@ import unittest
 from marllib.phase5_runner import (
     CRUISE_ALTITUDE_M,
     build_phase5_command,
+    build_phase5_velocity_command,
     flu_snapshot_to_telemetry_state,
     snapshot_from_telemetry,
     validate_command_path,
@@ -43,6 +44,37 @@ class Phase5CommandEncodingTest(unittest.TestCase):
         self.assertEqual(decoded.source_frame, "PX4_NED")
         self.assertAlmostEqual(decoded.target[1], -0.5)
         self.assertAlmostEqual(decoded.target[2], -CRUISE_ALTITUDE_M)
+
+    def test_build_phase5_velocity_command(self) -> None:
+        command = build_phase5_velocity_command(
+            drone=2,
+            safe_velocity=(1.0, -0.5),
+            vertical_velocity=0.2,
+            timestamp_ms=123,
+        )
+        self.assertEqual(command["action"], "velocity")
+        self.assertEqual(command["source_frame"], "FLU")
+        self.assertEqual(command["velocity"], [1.0, -0.5, 0.2])
+
+    def test_velocity_command_passes_local_safety(self) -> None:
+        timestamp_ms = 1000
+        command = build_phase5_velocity_command(
+            drone=2,
+            safe_velocity=(1.0, 0.0),
+            vertical_velocity=0.1,
+            timestamp_ms=timestamp_ms,
+        )
+        state = flu_snapshot_to_telemetry_state(
+            2,
+            (0.0, 0.0, CRUISE_ALTITUDE_M),
+            (0.0, 0.0, 0.0),
+            timestamp_ms=timestamp_ms,
+        )
+        allowed, reason = validate_command_path(
+            command, state, now_ms=timestamp_ms
+        )
+        self.assertTrue(allowed, reason)
+        self.assertEqual(reason, "ok")
 
     def test_normal_command_passes_local_safety(self) -> None:
         timestamp_ms = 1000

@@ -75,6 +75,26 @@ class MqttCodecTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             decode_command({"drone": 2, "action": "move_to"})
 
+    def test_decode_velocity_action(self) -> None:
+        command = decode_command(
+            {"drone": 2, "action": "velocity", "velocity": [1.0, -2.0, -0.5]}
+        )
+        self.assertEqual(command.action, "velocity")
+        self.assertEqual(command.velocity, (1.0, -2.0, -0.5))
+        self.assertIsNone(command.target)
+
+    def test_decode_rejects_missing_velocity(self) -> None:
+        with self.assertRaises(ValueError):
+            decode_command({"drone": 2, "action": "velocity"})
+
+    def test_normalize_flu_velocity_to_ned(self) -> None:
+        command = decode_command(
+            {"drone": 2, "action": "velocity", "velocity": [1.0, 2.0, 3.0]},
+            default_source_frame="FLU",
+        )
+        normalized = normalize_command_to_ned(command)
+        self.assertEqual(normalized.velocity, (1.0, -2.0, -3.0))
+
     def test_decode_takeoff_altitude(self) -> None:
         command = decode_command(
             {"drone": 2, "action": "takeoff", "altitude_m": 3.0, "ttl_sec": 0.5}

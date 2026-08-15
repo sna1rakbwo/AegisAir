@@ -164,6 +164,12 @@ def build_control_plan(
             raise ValueError("move_to requires a target position")
         trajectory = TrajectorySetpointSpec(position=target, velocity=velocity, yaw=yaw)
         commands.append(cmd(VEHICLE_CMD_DO_SET_MODE, 1.0, 6.0))
+    elif action == "velocity":
+        if velocity is None:
+            raise ValueError("velocity requires a velocity vector")
+        offboard = OffboardControlSpec(position=False, velocity=True)
+        trajectory = TrajectorySetpointSpec(velocity=velocity, yaw=yaw)
+        commands.append(cmd(VEHICLE_CMD_DO_SET_MODE, 1.0, 6.0))
     elif action == "hold":
         if current_position is None:
             raise ValueError("hold requires a current position")

@@ -34,6 +34,17 @@ class Px4CodecTest(unittest.TestCase):
         plan = build_control_plan("move_to", target=(4.0, -1.0, -2.0))
         self.assertEqual(plan.trajectory.position, (4.0, -1.0, -2.0))
 
+    def test_velocity_plan_uses_velocity_and_nan_position(self) -> None:
+        plan = build_control_plan("velocity", velocity=(1.0, -2.0, -0.5))
+        self.assertTrue(plan.offboard.velocity)
+        self.assertFalse(plan.offboard.position)
+        self.assertEqual(plan.trajectory.velocity, (1.0, -2.0, -0.5))
+        self.assertIsNone(plan.trajectory.position)
+
+    def test_velocity_plan_requires_velocity(self) -> None:
+        with self.assertRaises(ValueError):
+            build_control_plan("velocity")
+
     def test_takeoff_plan_uses_negative_altitude(self) -> None:
         plan = build_control_plan("takeoff", takeoff_altitude_m=2.5)
         self.assertAlmostEqual(plan.trajectory.position[2], -2.5)

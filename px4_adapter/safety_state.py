@@ -109,6 +109,16 @@ class LocalSafetyState:
                 if vertical_speed > self.limits.max_vertical_speed_mps:
                     return _reject("LOCAL_HOLD", "vertical_speed_out_of_limits", command_id)
 
+        if command.action == "velocity":
+            if command.velocity is None:
+                return _reject("LOCAL_HOLD", "missing_velocity", command_id)
+            horizontal_speed = math.hypot(command.velocity[0], command.velocity[1])
+            vertical_speed = abs(command.velocity[2])
+            if horizontal_speed > self.limits.max_horizontal_speed_mps:
+                return _reject("LOCAL_HOLD", "horizontal_speed_out_of_limits", command_id)
+            if vertical_speed > self.limits.max_vertical_speed_mps:
+                return _reject("LOCAL_HOLD", "vertical_speed_out_of_limits", command_id)
+
         if command.action == "takeoff" and command.altitude_m is not None:
             if not (
                 self.limits.min_altitude_m
