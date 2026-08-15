@@ -134,9 +134,10 @@ def _velocity(t: float, v: Vector3, a: float, direction: Vector3) -> Vector3:
 class PredictiveMonitor:
     """Pairwise future-margin predictor."""
 
-    def __init__(self, lambda_a: float = 0.8, q_pred: float = 0.0) -> None:
+    def __init__(self, lambda_a: float = 0.8, q_pred: float = 0.0, use_ca: bool = True) -> None:
         self.lambda_a = lambda_a
         self.q_pred = q_pred
+        self.use_ca = use_ca
         self.acc_filters: dict[int, AccelerationFilter] = {}
 
     def _acc_filter(self, agent_id: int) -> AccelerationFilter:
@@ -164,8 +165,8 @@ class PredictiveMonitor:
         steps: int = 30,
     ) -> PredictionResult:
         """Return the worst predicted margin, time of that margin, and TTSB."""
-        a_i = self._acc_filter(agent_i).ema
-        a_j = self._acc_filter(agent_j).ema
+        a_i = self._acc_filter(agent_i).ema if self.use_ca else 0.0
+        a_j = self._acc_filter(agent_j).ema if self.use_ca else 0.0
         dir_i = (1.0, 0.0, 0.0)
         dir_j = (1.0, 0.0, 0.0)
 
@@ -224,7 +225,7 @@ class PredictiveMonitor:
             - 1.0 * max(sigma_i, sigma_j)
         )
         return PredictionResult(
-            model="FILTERED_CA",
+            model="FILTERED_CA" if self.use_ca else "CV",
             rho_min_pred=best_rho,
             tau_star=best_tau,
             ttsb=ttsb,
