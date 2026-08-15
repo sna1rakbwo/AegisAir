@@ -28,6 +28,7 @@ class RuntimeAssuranceParams:
     prediction_horizon: float = 3.0
     rho_pred_threshold: float = 0.0
     q_pred: float = 0.0
+    estimated_recovery_latency: float = 0.5
 
     def __post_init__(self) -> None:
         if self.d0 < 0 or self.a_eff <= 0 or self.v_max < 0 or self.a_max < 0:

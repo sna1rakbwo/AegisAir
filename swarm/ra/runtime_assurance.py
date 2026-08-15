@@ -27,6 +27,8 @@ class FilterResult:
     time_to_min_margin: float
     time_to_safety_boundary: float | None
     prediction_confidence: float
+    recovery_buffer: float | None
+    semantic_recovery_feasible: bool
     degradation: float
     worst_pair: int | None
     intervened: bool
@@ -156,6 +158,15 @@ class RuntimeAssurance:
                 time_to_min_margin=float(worst_pred_tau),
                 time_to_safety_boundary=worst_ttsb,
                 prediction_confidence=float(worst_confidence),
+                recovery_buffer=(
+                    worst_ttsb - self.params.estimated_recovery_latency
+                    if worst_ttsb is not None
+                    else None
+                ),
+                semantic_recovery_feasible=(
+                    worst_ttsb is not None
+                    and worst_ttsb > self.params.estimated_recovery_latency
+                ),
                 degradation=float(worst_g),
                 worst_pair=worst_pair,
                 intervened=intervened,
