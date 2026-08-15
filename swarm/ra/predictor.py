@@ -134,7 +134,7 @@ def _velocity(t: float, v: Vector3, a: float, direction: Vector3) -> Vector3:
 class PredictiveMonitor:
     """Pairwise future-margin predictor."""
 
-    def __init__(self, lambda_a: float = 0.8, q_pred: float = 0.05) -> None:
+    def __init__(self, lambda_a: float = 0.8, q_pred: float = 0.0) -> None:
         self.lambda_a = lambda_a
         self.q_pred = q_pred
         self.acc_filters: dict[int, AccelerationFilter] = {}

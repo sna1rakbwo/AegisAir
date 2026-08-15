@@ -48,7 +48,7 @@ class RuntimeAssurance:
         self.perception_sigma = perception_sigma
         self.rho_warn = rho_warn
         self.trackers: dict[tuple[int, int], PairMarginTracker] = {}
-        self.monitor = PredictiveMonitor()
+        self.monitor = PredictiveMonitor(q_pred=self.params.q_pred)
         self._last_t: float | None = None
 
     def _tracker(self, i: int, j: int) -> PairMarginTracker:
