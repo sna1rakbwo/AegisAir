@@ -13,7 +13,7 @@ from swarm.ra.margins import (
     closing_speed,
     dynamic_safety_boundary,
 )
-from swarm.ra.predictor import predicted_min_margin
+from swarm.ra.predictor import PredictiveMonitor
 
 
 @dataclass
@@ -25,6 +25,8 @@ class FilterResult:
     safety_margin: float
     predicted_margin: float
     time_to_min_margin: float
+    time_to_safety_boundary: float | None
+    prediction_confidence: float
     degradation: float
     worst_pair: int | None
     intervened: bool
@@ -46,6 +48,8 @@ class RuntimeAssurance:
         self.perception_sigma = perception_sigma
         self.rho_warn = rho_warn
         self.trackers: dict[tuple[int, int], PairMarginTracker] = {}
+        self.monitor = PredictiveMonitor()
+        self._last_t: float | None = None
 
     def _tracker(self, i: int, j: int) -> PairMarginTracker:
         key = (min(i, j), max(i, j))
@@ -63,6 +67,14 @@ class RuntimeAssurance:
         aoi = aoi or {}
         results: dict[int, FilterResult] = {}
 
+        dt = self.params.degradation_dt
+        if self._last_t is not None:
+            dt = max(1e-3, t - self._last_t)
+        self._last_t = t
+        for agent_id, snapshot in snapshots.items():
+            if snapshot.velocity is not None:
+                self.monitor.update_acceleration(agent_id, snapshot.velocity, dt)
+
         for drone_id, snapshot in snapshots.items():
             p_i = np.asarray(snapshot.position[:2], dtype=np.float64)
             v_i = np.asarray(snapshot.velocity[:2], dtype=np.float64) if snapshot.velocity else np.zeros(2)
@@ -74,6 +86,8 @@ class RuntimeAssurance:
             worst_pair: int | None = None
             worst_pred_rho = float("inf")
             worst_pred_tau = 0.0
+            worst_ttsb: float | None = None
+            worst_confidence = 1.0
 
             for other_id, other in snapshots.items():
                 if other_id == drone_id:
@@ -103,17 +117,24 @@ class RuntimeAssurance:
                     worst_pair = other_id
                     worst_g = g
 
-                pred_rho, pred_tau = predicted_min_margin(
+                pred = self.monitor.predict(
+                    agent_i=drone_id,
+                    agent_j=other_id,
                     p_i=snapshot.position,
                     p_j=other.position,
                     v_i=snapshot.velocity or (0.0, 0.0, 0.0),
                     v_j=other.velocity or (0.0, 0.0, 0.0),
-                    d_safe=d_safe,
+                    sigma_i=self.perception_sigma,
+                    sigma_j=self.perception_sigma,
+                    aoi=pair_aoi,
+                    params=self.params,
                     horizon=self.params.prediction_horizon,
                 )
-                if pred_rho < worst_pred_rho:
-                    worst_pred_rho = pred_rho
-                    worst_pred_tau = pred_tau
+                if pred.rho_min_pred < worst_pred_rho:
+                    worst_pred_rho = pred.rho_min_pred
+                    worst_pred_tau = pred.tau_star
+                    worst_ttsb = pred.ttsb
+                    worst_confidence = pred.confidence
 
             u_safe = project_safe_action(u_nom, constraints, self.v_max)
             intervened = bool(np.linalg.norm(u_safe - u_nom) > 1e-6)
@@ -133,6 +154,8 @@ class RuntimeAssurance:
                 safety_margin=float(worst_rho),
                 predicted_margin=float(worst_pred_rho),
                 time_to_min_margin=float(worst_pred_tau),
+                time_to_safety_boundary=worst_ttsb,
+                prediction_confidence=float(worst_confidence),
                 degradation=float(worst_g),
                 worst_pair=worst_pair,
                 intervened=intervened,
