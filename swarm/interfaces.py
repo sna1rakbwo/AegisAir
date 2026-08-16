@@ -220,6 +220,10 @@ class MissionDecision(_Frozen):
     agent: int | None = Field(default=None, ge=0)
     high: int | None = Field(default=None, ge=0)
     low: int | None = Field(default=None, ge=0)
+    priority_order: list[int] | None = Field(
+        default=None,
+        description="Ordered right-of-way list for SEQUENTIAL_PASS recovery",
+    )
 
 
 # ---------------------------------------------------------------------------

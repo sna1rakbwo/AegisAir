@@ -6,6 +6,7 @@ import unittest
 
 from marllib.phase5_runner import (
     CRUISE_ALTITUDE_M,
+    _priority_order,
     build_phase5_command,
     build_phase5_velocity_command,
     flu_snapshot_to_telemetry_state,
@@ -16,6 +17,10 @@ from px4_adapter.mqtt_codec import decode_command, normalize_command_to_ned
 
 
 class Phase5CommandEncodingTest(unittest.TestCase):
+    def test_priority_order_puts_urgent_first(self) -> None:
+        self.assertEqual(_priority_order([2, 3, 4, 5], urgent_drone=4), [4, 2, 3, 5])
+        self.assertEqual(_priority_order([2, 3, 4, 5]), [2, 3, 4, 5])
+
     def test_build_phase5_command_integrates_safe_velocity(self) -> None:
         command = build_phase5_command(
             drone=2,

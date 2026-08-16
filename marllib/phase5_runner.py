@@ -360,6 +360,16 @@ def _in_zone(pos: np.ndarray, zone: tuple[float, float, float, float]) -> bool:
     return x0 <= pos[0] <= x1 and y0 <= pos[1] <= y1
 
 
+def _priority_order(
+    drone_ids: list[int],
+    urgent_drone: int | None = None,
+) -> list[int]:
+    """Mission-aware pass order: urgent drone first, then id-sorted rest."""
+    if urgent_drone is not None and urgent_drone in drone_ids:
+        return [urgent_drone] + sorted(d for d in drone_ids if d != urgent_drone)
+    return sorted(drone_ids)
+
+
 def _make_replanner(
     *,
     client,
@@ -392,6 +402,7 @@ def run_sim_episode(
     real_time: bool,
     nominal_noise: float = 0.0,
     sequential_pass: bool = False,
+    urgent_drone: int | None = None,
 ) -> dict[str, Any]:
     env.reset(seed=seed)
     replanner = (
@@ -431,7 +442,7 @@ def run_sim_episode(
     rejected_commands = 0
     seq_state = {
         "active": False,
-        "order": sorted(env.agent_ids),
+        "order": _priority_order(env.agent_ids, urgent_drone),
         "idx": 0,
         "best": {i: float("inf") for i in env.agent_ids},
         "stall": {i: 0 for i in env.agent_ids},
@@ -653,6 +664,7 @@ def run_mqtt_loop(
     sampled_data: bool = False,
     gamma: float = 0.1,
     sequential_pass: bool = False,
+    urgent_drone: int | None = None,
 ) -> dict[str, Any]:
     """Live PX4 loop: arm/takeoff, then RA-filtered closed-loop control.
 
@@ -788,7 +800,7 @@ def run_mqtt_loop(
         traj_rows: list[dict[str, Any]] = []
         seq_state = {
             "active": False,
-            "order": sorted(drone_ids),
+            "order": _priority_order(drone_ids, urgent_drone),
             "idx": 0,
             "best": {i: float("inf") for i in drone_ids},
             "stall": {i: 0 for i in drone_ids},
@@ -1027,6 +1039,7 @@ def main() -> int:
     parser.add_argument("--sampled-data", action="store_true")
     parser.add_argument("--gamma", type=float, default=0.1)
     parser.add_argument("--sequential-pass", action="store_true")
+    parser.add_argument("--urgent-drone", type=int, default=None)
     parser.add_argument("--nominal-noise", type=float, default=0.0)
     parser.add_argument("--real-time", action="store_true")
     parser.add_argument("--mqtt", action="store_true")
@@ -1161,6 +1174,7 @@ def main() -> int:
                     sampled_data=args.sampled_data,
                     gamma=args.gamma,
                     sequential_pass=args.sequential_pass,
+                    urgent_drone=args.urgent_drone,
                 )
                 seed_results.append(
                     {
@@ -1219,6 +1233,7 @@ def main() -> int:
                 sampled_data=args.sampled_data,
                 gamma=args.gamma,
                 sequential_pass=args.sequential_pass,
+                urgent_drone=args.urgent_drone,
             )
             episodes.append(result)
             print(
@@ -1274,6 +1289,7 @@ def main() -> int:
             real_time=args.real_time,
             nominal_noise=args.nominal_noise,
             sequential_pass=args.sequential_pass,
+            urgent_drone=args.urgent_drone,
         )
         runs.append(run)
 
