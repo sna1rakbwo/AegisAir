@@ -18,6 +18,7 @@ import math
 import random
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -883,6 +884,12 @@ def main() -> int:
     parser.add_argument("--qwen-max-tokens", type=int, default=48)
     parser.add_argument("--seeds", type=int, default=1)
     parser.add_argument("--max-steps", type=int, default=120)
+    parser.add_argument(
+        "--dt",
+        type=float,
+        default=None,
+        help="Override the lightweight environment step time (seconds).",
+    )
     parser.add_argument("--rate-hz", type=float, default=10.0)
     parser.add_argument("--hocbf", action="store_true")
     parser.add_argument("--hocbf-k1", type=float, default=1.0)
@@ -930,6 +937,8 @@ def main() -> int:
     args = parser.parse_args()
 
     spec = _scenario(args.scenario)
+    if args.dt is not None:
+        spec["scenario"] = replace(spec["scenario"], dt=args.dt)
     if args.llm == "rule":
         llm_client = RuleMissionPlanner()
         llm_fallback = None

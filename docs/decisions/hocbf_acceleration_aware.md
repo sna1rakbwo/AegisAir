@@ -158,14 +158,35 @@ dt     k=2.5       k=3.0       k=3.5
 `dt=0.05` 把缺口压到约 0.27%，但 `dt=0.02` 不再单调改善；剩余缺口不是单纯
 `dt`，还包含离散时间 barrier / LLM recovery maneuver 的残差。
 
+## 6.3 冻结：discrete-time implementation tolerance
+
+**不上离散时间 CBF。** 把采样实现的小幅安全裕度违反记为
+`epsilon_impl = 3e-3`，并明确写为 limitation：
+
+> The sampled implementation permits a small empirical safety-margin
+> tolerance (`epsilon_impl ≈ 3e-3`), while maintaining zero collisions in
+> the evaluated scenarios.  We therefore do not claim exact continuous-time
+> invariance in the sampled implementation.
+
+冻结评估配置：
+
+```text
+dt = 0.05 s
+k1 = k2 = 3.0
+a_max = 2.0 m/s^2
+kv = 2.0
+```
+
+对应结果：`collision=0`、`mission completed`、`min_rho≈-0.0029`。
+
 ## 7. 下一步
 
-1. 关闭剩余约 0.27% 缺口：离散时间 CBF 或显式记录 `epsilon` violation
-   （不声称连续时间严格保证）。
-2. 用真实 `MlxLmClient` 替换 rule 版复测，确认 LLM 能产出合法 YIELD/REROUTE。
-3. 轻量 sim 的 CBF vs HOCBF 对比表（min_rho / violation / collision /
-   intervention / control effort / mission time）。
-4. 通过后再接 PX4 velocity-mode。
+1. 用真实 `MlxLmClient` 替换 rule 版复测，确认 LLM 能产出合法 YIELD/REROUTE。
+2. 2 机/4 机多次重复出统计（`min_rho`、violation、collision、intervention、
+   mission time）。
+3. imperfect MARL 下的 HOCBF 保护。
+4. 接 PX4/Gazebo velocity-mode，观察 `epsilon_impl` 是否被放大；若放大到
+   `-0.05~-0.1` 或出现 near collision，再重新考虑 discrete-time CBF。
 
 ## 8. 主张边界
 
