@@ -159,8 +159,8 @@ Go，但需先处理内存压力：
 
 ## 6. 下一步
 
-1. 把 `SharedStateEstimator` 接入 live 路径（MQTT telemetry -> estimator ->
-   RA），用真实 delay/dropout 验证本地闸门 C 的映射是否成立。
+1. ~~把 `SharedStateEstimator` 接入 live 路径~~（已完成：`phase5_runner.py`
+   新增 `--estimator` 系列参数，MQTT telemetry -> estimator -> RA）。
 2. 单机 live 故障注入（packet loss / stale telemetry / latency），复用
    `px4_adapter/p5/live_command_fault_scan.py` 的 frozen 协议。
 3. 4 机 sampled-data + SEQUENTIAL_PASS 下注入故障，观察
