@@ -31,6 +31,27 @@ from swarm.ra.runtime_assurance import (
 )
 
 
+def _step_px4(env: MultiUAVEnv, v_cmd, dt: float, tau_px4: float) -> None:
+    """First-order PX4 velocity-tracking step (positions/velocities only)."""
+    arena = env.scenario.arena
+    for idx in range(env.num_agents):
+        v = env.velocities[idx]
+        cmd = np.asarray(v_cmd[env.agent_ids[idx]], dtype=np.float64)
+        if tau_px4 > 0:
+            alpha = dt / (dt + tau_px4)
+            v_next = v + alpha * (cmd - v)
+        else:
+            v_next = cmd
+        v_next = v + np.clip(
+            v_next - v, -env.scenario.accel_limit * dt, env.scenario.accel_limit * dt
+        )
+        env.velocities[idx] = v_next
+    env.positions = env.positions + env.velocities * dt
+    env.positions = np.clip(
+        env.positions, (arena[0], arena[2]), (arena[1], arena[3])
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", required=True)
@@ -41,6 +62,7 @@ def main() -> int:
     parser.add_argument("--sequential-pass", action="store_true")
     parser.add_argument("--urgent-drone", type=int, default=2)
     parser.add_argument("--aoi-ms", type=float, default=0.0)
+    parser.add_argument("--tau-px4", type=float, default=0.0)
     args = parser.parse_args()
 
     spec = _scenario("multi_uav")
@@ -156,8 +178,8 @@ def main() -> int:
         r_pred = r + v * args.dt + 0.5 * a_rel * args.dt * args.dt
         h_next_pred = float(np.dot(r_pred, r_pred)) - s_next * s_next
 
-        # Step the actual environment with the safe actions.
-        _, _, _, _, infos = env.step(v_safe)
+        # Step the actual environment with a PX4-like velocity-tracking model.
+        _step_px4(env, v_safe, args.dt, args.tau_px4)
         p_i = env.positions[i]
         p_j = env.positions[j]
         d_actual = float(np.linalg.norm(p_i - p_j))

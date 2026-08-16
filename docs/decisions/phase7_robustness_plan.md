@@ -99,6 +99,35 @@ min-rho point: rho=0.3305, residual = h_next_actual - (1-gamma)*h_now = +0.172
 live 的强越界复现出来；确认后就能决定是修 barrier 的动力学假设，还是把
 claim 收紧为 feasible/well-modeled envelope。
 
+### 3.3 PX4 velocity-tracking 复现（`--tau-px4` 一阶速度响应）
+
+在精确 sim 里把 `env.step` 换成 `dv/dt = (v_cmd - v)/tau_px4`（再叠加
+`a_max` 限幅），`seq-pass + aoi=11ms` 下扫 `tau_px4`：
+
+| tau_px4 | 首次 `rho<0` 时刻 | 该点 `rho` |
+| --- | --- | --- |
+| 0.00 | t=15.05 | -0.007 |
+| 0.05 | t=18.05 | -0.013 |
+| 0.10 | t=6.55 | -0.001 |
+| 0.20 | t=5.70 | -0.013 |
+| 0.30 | t=8.60 | -0.016 |
+
+结论：
+
+- 一阶 velocity-tracking 模型把首次越界从 t=15s 提前到 **t≈5.7s**，和 live
+  的 t≈6.7–9.8s 同量级——**说明 PX4 速度跟踪滞后确实是主因之一**；
+- 但 sim 复现的越界深度仍很浅（`rho≈-0.01`），而 live 最深 `rho=-0.51`
+  （`dist=0.53m` vs `d_safe≈1.08m`）。深度差距仍需解释：live 里 right-of-way
+  drone 正朝被 SEQUENTIAL_PASS 压住的 drone 飞（`v_nom≈1.15m/s`，另一架
+  `velocity_scale=0`），形成一个更恶劣的“移动目标 vs 静止障碍”配置，sim 的
+  轨迹没完全走到同一配置。
+
+所以最终定位为：
+
+> live `rho<0` = barrier 离散预测 + telemetry age + PX4 速度跟踪滞后 +
+> SEQUENTIAL_PASS 造成的特定危险配置，四者叠加；barrier 算法在精确 sim 里
+> 本身是保守的。
+
 ## 4. 对齐 Phase 7：policy-quality robustness experiment
 
 不要只测一个 checkpoint。做成 **nominal policy × RA** 的因子实验。
