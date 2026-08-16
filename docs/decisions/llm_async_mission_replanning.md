@@ -49,6 +49,10 @@ E_mission: 外部注入的 mission/priority/goal 变化
 
 ## LLM 输出：只允许高层动作
 
+> 注（2026-08-16 更新）：针对「安全约束造成的对称 coordination deadlock」，
+> 高层动作从「只改几何（REROUTE）」扩展到「改 coordination responsibility」。
+> 见文末「Coordination Deadlock Resolution」。
+
 ```json
 {"action": "REASSIGN", "agent": "uav_3", "task": "inspection_B"}
 {"action": "REROUTE", "agent": "uav_2", "via": ["corridor_C"]}
@@ -81,3 +85,43 @@ schema + action whitelist + validator，并由 Runtime Assurance 保留最终否
 3. 某 UAV 失效后任务重分配。
 
 这三类比「被 CBF 推来推去」更能证明语义级重规划的必要性。
+
+## Coordination Deadlock Resolution（2026-08-16 更新）
+
+4 机对称交叉暴露了一个新问题：barrier 会给出最保守的「大家都不动」，此时
+`REROUTE`/`YIELD` 只是改变 nominal geometry，最终仍会被 sampled-data barrier
+投影掉，所以 LLM「想去哪」不等于「谁先走」。
+
+因此 LLM 的死锁恢复职责从「位置修改」升级为「通行权 / coordination
+structure」：
+
+```json
+{
+  "mode": "SEQUENTIAL_PASS",
+  "priority_order": ["uav_1", "uav_3", "uav_2", "uav_4"],
+  "reason": "uav_1 carries an urgent medical mission"
+}
+```
+
+deterministic executor 只取结构化 `priority_order`，翻译成：
+
+```text
+right-of-way UAV -> GO
+others           -> HOLD
+等 right-of-way 离开冲突区 -> 释放下一个
+```
+
+barrier 全程在线，不放松任何安全约束。LLM 不直接输出连续控制量，也不决定
+「怎么走」，只决定「谁先走」。
+
+分层职责：
+
+```text
+Barrier:  谁都不能撞（safety）
+LLM:      谁更应该先走（mission semantics）
+Executor: 按顺序 GO/HOLD 执行（deterministic）
+```
+
+这为 LLM 提供一个比「固定 ID priority」更有说服力的实验场景：紧急任务位置
+随机变化时，只有 mission-aware / LLM priority 能优化紧急任务完成时间，而
+固定 ID priority 做不到。

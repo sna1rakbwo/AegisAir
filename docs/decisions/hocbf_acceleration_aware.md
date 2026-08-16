@@ -131,7 +131,11 @@ priority yield    -0.0086    False
 又完成；需要的是 **barrier slack（显式声明软化）**，或预先排序/错峰通过，
 而不是简单侧向/让行。
 
-## 6.2 LLM deadlock resolution（Semantic Mission Recovery）
+## 6.2 LLM deadlock resolution（Semantic Mission Recovery）【已修改：见 §11/§13】
+
+> 本节最初把死锁解除写成「LLM 输出 YIELD + REROUTE 改变几何」。后续 PX4 4 机
+> 证明该方案会被 sampled-data barrier 投影掉，因此已改为 **SEQUENTIAL_PASS**
+> （LLM 决定通行顺序，而不是只改 waypoint）。
 
 把死锁交给高层 LLM：`COORDINATION_DEGRADATION`（无 progress）触发
 `AsyncMissionReplanner`，rule 版 LLM 输出确定性 `YIELD + REROUTE`（按 id 奇偶
@@ -158,7 +162,11 @@ dt     k=2.5       k=3.0       k=3.5
 `dt=0.05` 把缺口压到约 0.27%，但 `dt=0.02` 不再单调改善；剩余缺口不是单纯
 `dt`，还包含离散时间 barrier / LLM recovery maneuver 的残差。
 
-## 6.3 冻结：discrete-time implementation tolerance
+## 6.3 冻结：discrete-time implementation tolerance【已修改：见 §10/§11】
+
+> 本节最初决定「不上离散时间 CBF」，只把 `epsilon_impl≈3e-3` 记为实现容差。
+> 后续 PX4 4 机出现 `min_rho≈-0.76` 和 near collision，已推翻该判断，重新
+> 进入 sampled-data / discrete-time barrier。
 
 **不上离散时间 CBF。** 把采样实现的小幅安全裕度违反记为
 `epsilon_impl = 3e-3`，并明确写为 limitation：
@@ -340,7 +348,44 @@ PX4 4-UAV        0.3249     1.3990          210
 安全判据 `min_rho>=0` 已满足；完整 mission 需要更长步数或更早触发 sequential
 pass。
 
-## 8. 主张边界
+## 13. 当前结论（已修改）
 
-当前只证明 HOCBF 已实现且 2 机 sim 安全完成；4 机 sim 尚未解决 deadlock，
-更未接 PX4/Gazebo。不能声称四机 HOCBF 安全或 mission 完成。
+最终链路定为：
+
+```text
+MARL v_nom
+  -> a_nom = k_v(v_nom - v_actual)
+  -> Sampled-Data Acceleration QP（r_{k+1} 预测 + s_{k+1} 预测）
+  -> a_safe -> v_cmd = v_actual + a_safe*dt
+  -> PX4 velocity-mode offboard
+        |
+        +-- deadlock -> SEQUENTIAL_PASS（LLM/rule 决定 right-of-way，executor HOLD/GO）
+```
+
+核心区分：
+
+```text
+Barrier（sampled-data）：决定什么安全，谁都不能撞。
+LLM / rule：决定谁更应该先走（coordination responsibility）。
+Executor：按通行顺序执行 GO / HOLD，不绕过 barrier。
+```
+
+修正后的诊断结论：
+
+> Increasing the realized control rate from 7.8 Hz to 20 Hz substantially
+> reduced velocity tracking error but did not eliminate the safety-boundary
+> violation, indicating the dominant residual error arises from the
+> continuous-time barrier formulation under sampled PX4 execution rather than
+> insufficient update rate alone.
+
+当前证据：
+
+- 轻量 4 机：sampled-data + SEQUENTIAL_PASS，`min_rho>0`、完成、0 碰撞。
+- PX4 2 机：`min_rho=0.42>0`。
+- PX4 4 机：`min_rho=0.32>0`（首次 live 安全通过）。
+
+主张边界：
+
+这是 SITL/Gazebo 仿真证据，不是真实飞行；4 机 PX4 当前只证明 `min_rho>=0`
+的安全判据成立，完整 mission 完成率还需更长步数/更早触发 sequential pass
+补足。
