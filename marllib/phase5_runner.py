@@ -335,6 +335,29 @@ def _snapshots(env: MultiUAVEnv) -> dict[int, DroneSnapshot]:
     }
 
 
+def _noisy_snapshots(
+    snapshots: dict[int, DroneSnapshot],
+    fault: dict[str, Any],
+    rng: np.random.Generator,
+) -> dict[int, DroneSnapshot]:
+    """Perturb the perceived shared state (position/velocity) with Gaussian noise."""
+    pos_sigma = float(fault.get("perception_noise_pos_m") or 0.0)
+    vel_sigma = float(fault.get("perception_noise_vel_mps") or 0.0)
+    noisy: dict[int, DroneSnapshot] = {}
+    for i, snap in snapshots.items():
+        velocity = snap.velocity or (0.0, 0.0, 0.0)
+        position = tuple(
+            float(snap.position[k]) + float(rng.normal(0.0, pos_sigma))
+            for k in range(3)
+        )
+        velocity_noisy = tuple(
+            float(velocity[k]) + float(rng.normal(0.0, vel_sigma))
+            for k in range(3)
+        )
+        noisy[i] = replace(snap, position=position, velocity=velocity_noisy)
+    return noisy
+
+
 def _go_to_goal(
     env: MultiUAVEnv,
     *,
@@ -429,11 +452,12 @@ def _make_replanner(
     client,
     fallback,
     dt: float,
+    config: ReplanConfig | None = None,
 ) -> AsyncMissionReplanner:
     return AsyncMissionReplanner(
         client=client,
         fallback=fallback,
-        config=ReplanConfig(),
+        config=config or ReplanConfig(),
         dt=dt,
     )
 
@@ -457,13 +481,22 @@ def run_sim_episode(
     nominal_noise: float = 0.0,
     sequential_pass: bool = False,
     urgent_drone: int | None = None,
+    fault: dict[str, Any] | None = None,
+    replan_timeout_s: float | None = None,
 ) -> dict[str, Any]:
     env.reset(seed=seed)
+    fault = fault or {}
+    replan_config = (
+        ReplanConfig(replan_timeout_s=replan_timeout_s)
+        if replan_timeout_s is not None
+        else ReplanConfig()
+    )
     replanner = (
         _make_replanner(
             client=llm_client,
             fallback=llm_fallback,
             dt=env.scenario.dt,
+            config=replan_config,
         )
         if mode == "ASYNC"
         else None
@@ -494,6 +527,7 @@ def run_sim_episode(
     control_effort_n = 0
     emitted_commands = 0
     rejected_commands = 0
+    rejected_reasons: dict[str, int] = {}
     seq_state = {
         "active": False,
         "order": _priority_order(env.agent_ids, urgent_drone),
@@ -570,7 +604,22 @@ def run_sim_episode(
             for i in env.agent_ids:
                 nominal[i] = nominal[i] + rng.normal(0.0, nominal_noise, 2)
         snapshots = _snapshots(env)
-        results = ra.filter(snapshots, nominal, t=t)
+        pos_sigma = float(fault.get("perception_noise_pos_m") or 0.0)
+        vel_sigma = float(fault.get("perception_noise_vel_mps") or 0.0)
+        if pos_sigma > 0 or vel_sigma > 0:
+            rng = np.random.default_rng(seed * 10_000_000 + step)
+            snapshots = _noisy_snapshots(snapshots, fault, rng)
+
+        stale_ms = int(fault.get("telemetry_stale_ms") or 0)
+        aoi: dict[tuple[int, int], float] = {}
+        if stale_ms > 0:
+            aoi = {
+                (i, j): stale_ms / 1000.0
+                for i in env.agent_ids
+                for j in env.agent_ids
+                if i != j
+            }
+        results = ra.filter(snapshots, nominal, t=t, aoi=aoi)
         cbf_events += sum(1 for r in results.values() if r.intervened)
         min_rho = min(min_rho, min(r.safety_margin for r in results.values()))
         for i in env.agent_ids:
@@ -600,6 +649,8 @@ def run_sim_episode(
 
         # Exercise the exact adapter command path for every drone.
         timestamp_ms = int(time.time_ns() // 1_000_000)
+        latency_ms = int(fault.get("command_latency_ms") or 0)
+        telemetry_timestamp_ms = timestamp_ms - stale_ms
         for i in env.agent_ids:
             if i in failed or i in aborted:
                 continue
@@ -612,14 +663,14 @@ def run_sim_episode(
                 drone=i,
                 safe_velocity=results[i].safe_action,
                 position_flu=position_flu,
-                timestamp_ms=timestamp_ms,
+                timestamp_ms=timestamp_ms - latency_ms,
                 priority=overrides.priority.get(i, "normal"),
             )
             telemetry_state = flu_snapshot_to_telemetry_state(
                 i,
                 position_flu,
                 (0.0, 0.0, 0.0),
-                timestamp_ms=timestamp_ms,
+                timestamp_ms=telemetry_timestamp_ms,
             )
             allowed, reason = validate_command_path(
                 command,
@@ -629,6 +680,7 @@ def run_sim_episode(
             emitted_commands += 1
             if not allowed:
                 rejected_commands += 1
+                rejected_reasons[reason] = rejected_reasons.get(reason, 0) + 1
 
         final = {i: np.asarray(results[i].safe_action) for i in env.agent_ids}
         _, _, terminated, _, infos = env.step(final)
@@ -685,6 +737,7 @@ def run_sim_episode(
         "high_reached_step": high_reached_step,
         "emitted_commands": emitted_commands,
         "rejected_commands": rejected_commands,
+        "rejected_reasons": rejected_reasons,
         "counters": (
             {
                 "triggers": replanner.counters.triggers,
@@ -692,6 +745,11 @@ def run_sim_episode(
                 "llm_plans_committed": replanner.counters.llm_plans_committed,
                 "fallback_plans_committed": replanner.counters.fallback_plans_committed,
                 "mission_changes": replanner.counters.mission_changes,
+                "llm_timeouts": replanner.counters.llm_timeouts,
+                "llm_syntactic_invalid": replanner.counters.llm_syntactic_invalid,
+                "llm_schema_invalid": replanner.counters.llm_schema_invalid,
+                "llm_semantic_invalid": replanner.counters.llm_semantic_invalid,
+                "llm_execution_invalid": replanner.counters.llm_execution_invalid,
             }
             if replanner is not None
             else None

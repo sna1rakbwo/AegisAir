@@ -5,7 +5,13 @@ from __future__ import annotations
 import unittest
 
 from swarm.ra.runtime_assurance import FilterResult
-from swarm.recovery import AsyncMissionReplanner, DeterministicRecoveryClient, ReplanConfig
+from swarm.recovery import (
+    AsyncMissionReplanner,
+    DeterministicRecoveryClient,
+    LLMRecoveryClient,
+    LLMRecoveryResult,
+    ReplanConfig,
+)
 from swarm.safety import DroneSnapshot
 
 
@@ -38,6 +44,26 @@ def _result(drone: int, *, intervened: bool = False) -> FilterResult:
 
 def _results(*drones) -> dict[int, FilterResult]:
     return {i: _result(i) for i in drones}
+
+
+class _FaultedClient(LLMRecoveryClient):
+    """Deterministic LLM backend that returns a fixed, possibly invalid payload."""
+
+    name = "faulted"
+
+    def __init__(self, raw) -> None:
+        self.raw = raw
+
+    def generate(self, context) -> LLMRecoveryResult:
+        return LLMRecoveryResult(
+            plan=None,
+            raw=self.raw,
+            latency_s=0.0,
+            timeout=False,
+            valid=self.raw is not None,
+            errors=[],
+            backend=self.name,
+        )
 
 
 class AsyncMissionReplannerTest(unittest.TestCase):
@@ -107,6 +133,53 @@ class AsyncMissionReplannerTest(unittest.TestCase):
         self._step(replanner, 0.0, [(0.0, 0.0, 0.0)])
         self._step(replanner, 0.1, [(2.0, 3.0, 0.0)])
         self.assertEqual(replanner.counters.plans_committed, 1)
+        replanner.shutdown()
+
+    def test_llm_timeout_falls_back(self) -> None:
+        replanner = AsyncMissionReplanner(
+            client=DeterministicRecoveryClient(plan_latency_s=0.3),
+            fallback=DeterministicRecoveryClient(),
+            config=ReplanConfig(replan_timeout_s=0.05),
+        )
+        self._step(replanner, 0.0, [(0.0, 0.0, 0.0)], mission_change={"drone": 0})
+        self.assertEqual(replanner.counters.triggers, 1)
+        self._step(replanner, 0.1, [(0.0, 0.0, 0.0)])
+        self.assertEqual(replanner.counters.llm_timeouts, 1)
+        self.assertEqual(replanner.counters.plans_committed, 1)
+        self.assertEqual(replanner.counters.fallback_plans_committed, 1)
+        replanner.shutdown()
+
+    def test_syntactic_invalid_llm_falls_back(self) -> None:
+        replanner = AsyncMissionReplanner(
+            client=_FaultedClient(None),
+            fallback=DeterministicRecoveryClient(),
+        )
+        self._step(replanner, 0.0, [(0.0, 0.0, 0.0)], mission_change={"drone": 0})
+        self._step(replanner, 0.1, [(0.0, 0.0, 0.0)])
+        self.assertEqual(replanner.counters.llm_syntactic_invalid, 1)
+        self.assertEqual(replanner.counters.fallback_plans_committed, 1)
+        replanner.shutdown()
+
+    def test_schema_invalid_llm_falls_back(self) -> None:
+        replanner = AsyncMissionReplanner(
+            client=_FaultedClient({"action": "HOVER"}),
+            fallback=DeterministicRecoveryClient(),
+        )
+        self._step(replanner, 0.0, [(0.0, 0.0, 0.0)], mission_change={"drone": 0})
+        self._step(replanner, 0.1, [(0.0, 0.0, 0.0)])
+        self.assertEqual(replanner.counters.llm_schema_invalid, 1)
+        self.assertEqual(replanner.counters.fallback_plans_committed, 1)
+        replanner.shutdown()
+
+    def test_semantic_invalid_llm_falls_back(self) -> None:
+        replanner = AsyncMissionReplanner(
+            client=_FaultedClient({"action": "REROUTE", "agent": 99}),
+            fallback=DeterministicRecoveryClient(),
+        )
+        self._step(replanner, 0.0, [(0.0, 0.0, 0.0)], mission_change={"drone": 0})
+        self._step(replanner, 0.1, [(0.0, 0.0, 0.0)])
+        self.assertEqual(replanner.counters.llm_semantic_invalid, 1)
+        self.assertEqual(replanner.counters.fallback_plans_committed, 1)
         replanner.shutdown()
 
 

@@ -4,16 +4,21 @@ from __future__ import annotations
 
 import unittest
 
+from marllib.envs.multi_uav import MultiUAVEnv
 from marllib.phase5_runner import (
     CRUISE_ALTITUDE_M,
     _priority_order,
+    _scenario,
     build_phase5_command,
     build_phase5_velocity_command,
     flu_snapshot_to_telemetry_state,
+    run_sim_episode,
     snapshot_from_telemetry,
     validate_command_path,
 )
 from px4_adapter.mqtt_codec import decode_command, normalize_command_to_ned
+from swarm.ra.margins import RuntimeAssuranceParams
+from swarm.ra.runtime_assurance import RuntimeAssurance
 
 
 class Phase5CommandEncodingTest(unittest.TestCase):
@@ -133,6 +138,40 @@ class Phase5CommandEncodingTest(unittest.TestCase):
         self.assertEqual(snapshot.drone_id, 2)
         self.assertEqual(snapshot.position, (1.0, 2.0, 3.0))
         self.assertEqual(snapshot.velocity, (0.1, 0.2, 0.3))
+
+
+class Phase6FaultInjectionTest(unittest.TestCase):
+    def _run(self, fault: dict) -> dict:
+        spec = _scenario("head_on")
+        env = MultiUAVEnv(spec["scenario"])
+        ra = RuntimeAssurance(
+            params=RuntimeAssuranceParams(tau_ctrl=0.0),
+            v_max=1.5,
+            sampled_data=True,
+            gamma=0.1,
+        )
+        return run_sim_episode(
+            spec=spec,
+            env=env,
+            seed=1,
+            ra=ra,
+            mode="CBF_ONLY",
+            llm_client=None,
+            llm_fallback=None,
+            max_steps=60,
+            real_time=False,
+            fault=fault,
+        )
+
+    def test_command_latency_fails_closed(self) -> None:
+        run = self._run({"command_latency_ms": 1100})
+        self.assertFalse(run["collision"])
+        self.assertGreater(run["rejected_reasons"].get("command_expired", 0), 0)
+
+    def test_stale_telemetry_fails_closed(self) -> None:
+        run = self._run({"telemetry_stale_ms": 3000})
+        self.assertFalse(run["collision"])
+        self.assertGreater(run["rejected_reasons"].get("telemetry_stale", 0), 0)
 
 
 if __name__ == "__main__":
