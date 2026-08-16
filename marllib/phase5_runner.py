@@ -37,6 +37,7 @@ from px4_adapter.mqtt_codec import (
 )
 from px4_adapter.px4_codec import flu_to_px4_ned
 from px4_adapter.safety_state import LocalSafetyState, SafetyLimits
+from swarm.estimation import SharedStateEstimator, SharedStateEstimatorConfig
 from swarm.ra.margins import RuntimeAssuranceParams
 from swarm.ra.runtime_assurance import RuntimeAssurance
 from swarm.recovery import (
@@ -356,6 +357,25 @@ def _noisy_snapshots(
         )
         noisy[i] = replace(snap, position=position, velocity=velocity_noisy)
     return noisy
+
+
+def _estimated_states_and_aoi(
+    snapshots: dict[int, DroneSnapshot],
+    estimator: SharedStateEstimator,
+    now_ms: int,
+    rng,
+) -> tuple[dict[int, Any], dict[tuple[int, int], float]]:
+    """Advance the shared-state estimator and derive pairwise AoI from it."""
+    estimated = estimator.step(snapshots, now_ms, rng=rng)
+    aoi: dict[tuple[int, int], float] = {}
+    for i in snapshots:
+        for j in snapshots:
+            if i == j:
+                continue
+            age_i = max(0.0, (now_ms - estimated[i].timestamp_ms) / 1000.0)
+            age_j = max(0.0, (now_ms - estimated[j].timestamp_ms) / 1000.0)
+            aoi[(i, j)] = max(age_i, age_j)
+    return estimated, aoi
 
 
 def _go_to_goal(
@@ -785,6 +805,8 @@ def run_mqtt_loop(
     gamma: float = 0.1,
     sequential_pass: bool = False,
     urgent_drone: int | None = None,
+    estimator_config: SharedStateEstimatorConfig | None = None,
+    estimator_seed: int = 0,
 ) -> dict[str, Any]:
     """Live PX4 loop: arm/takeoff, then RA-filtered closed-loop control.
 
@@ -819,6 +841,14 @@ def run_mqtt_loop(
     )
     overrides = RecoveryOverrides()
     telemetry: dict[int, DroneSnapshot] = {}
+    estimator = (
+        SharedStateEstimator(estimator_config)
+        if estimator_config is not None
+        else None
+    )
+    estimator_rng = (
+        np.random.default_rng(estimator_seed) if estimator is not None else None
+    )
 
     def publish(
         drone: int,
@@ -997,18 +1027,34 @@ def run_mqtt_loop(
             # The CBF boundary grows with the age of the telemetry used for
             # filtering.  Feed the measured round-trip age instead of assuming
             # zero latency, otherwise the live PX4 position-control loop can
-            # close faster than the lightweight point-mass simulation.
-            ages = {
-                i: max(0.0, (timestamp_ms - snapshots[i].timestamp_ms) / 1000.0)
-                for i in drone_ids
-            }
-            aoi = {
-                (i, j): max(ages[i], ages[j])
-                for i in drone_ids
-                for j in drone_ids
-                if i != j
-            }
-            results = ra.filter(snapshots, nominal, t=t, aoi=aoi)
+            # close faster than the lightweight point-mass simulation.  When
+            # the SharedStateEstimator is enabled, RA consumes its delayed,
+            # dropout-prone, covariance-bearing output instead of raw telemetry.
+            if estimator is not None:
+                ra_states, aoi = _estimated_states_and_aoi(
+                    snapshots, estimator, timestamp_ms, estimator_rng
+                )
+                ages = {
+                    i: max(
+                        0.0, (timestamp_ms - ra_states[i].timestamp_ms) / 1000.0
+                    )
+                    for i in drone_ids
+                }
+            else:
+                ra_states = snapshots
+                ages = {
+                    i: max(
+                        0.0, (timestamp_ms - snapshots[i].timestamp_ms) / 1000.0
+                    )
+                    for i in drone_ids
+                }
+                aoi = {
+                    (i, j): max(ages[i], ages[j])
+                    for i in drone_ids
+                    for j in drone_ids
+                    if i != j
+                }
+            results = ra.filter(ra_states, nominal, t=t, aoi=aoi)
             cbf_events += sum(1 for r in results.values() if r.intervened)
             positions = [snapshots[i].position for i in drone_ids]
             step_min_dist = float("inf")
@@ -1168,6 +1214,20 @@ def main() -> int:
     parser.add_argument("--gamma", type=float, default=0.1)
     parser.add_argument("--sequential-pass", action="store_true")
     parser.add_argument("--urgent-drone", type=int, default=None)
+    parser.add_argument(
+        "--estimator",
+        action="store_true",
+        help="Enable SharedStateEstimator in --mqtt mode.",
+    )
+    parser.add_argument("--estimator-delay-ms", type=int, default=0)
+    parser.add_argument("--estimator-dropout", type=float, default=0.0)
+    parser.add_argument(
+        "--estimator-measurement-cov-m2", type=float, default=0.01
+    )
+    parser.add_argument(
+        "--estimator-process-noise-m2-per-s", type=float, default=0.02
+    )
+    parser.add_argument("--estimator-seed", type=int, default=0)
     parser.add_argument("--nominal-noise", type=float, default=0.0)
     parser.add_argument("--real-time", action="store_true")
     parser.add_argument("--mqtt", action="store_true")
@@ -1208,6 +1268,17 @@ def main() -> int:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=1883)
     args = parser.parse_args()
+
+    estimator_config = (
+        SharedStateEstimatorConfig(
+            delay_ms=args.estimator_delay_ms,
+            dropout_rate=args.estimator_dropout,
+            measurement_cov_m2=args.estimator_measurement_cov_m2,
+            process_noise_m2_per_s=args.estimator_process_noise_m2_per_s,
+        )
+        if args.estimator
+        else None
+    )
 
     spec = _scenario(args.scenario)
     if args.dt is not None:
@@ -1303,6 +1374,8 @@ def main() -> int:
                     gamma=args.gamma,
                     sequential_pass=args.sequential_pass,
                     urgent_drone=args.urgent_drone,
+                    estimator_config=estimator_config,
+                    estimator_seed=args.estimator_seed,
                 )
                 seed_results.append(
                     {
@@ -1362,6 +1435,8 @@ def main() -> int:
                 gamma=args.gamma,
                 sequential_pass=args.sequential_pass,
                 urgent_drone=args.urgent_drone,
+                estimator_config=estimator_config,
+                estimator_seed=args.estimator_seed,
             )
             episodes.append(result)
             print(

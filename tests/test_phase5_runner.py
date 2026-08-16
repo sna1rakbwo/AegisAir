@@ -9,6 +9,7 @@ from marllib.phase5_runner import (
     CRUISE_ALTITUDE_M,
     _priority_order,
     _scenario,
+    _estimated_states_and_aoi,
     build_phase5_command,
     build_phase5_velocity_command,
     flu_snapshot_to_telemetry_state,
@@ -17,8 +18,10 @@ from marllib.phase5_runner import (
     validate_command_path,
 )
 from px4_adapter.mqtt_codec import decode_command, normalize_command_to_ned
+from swarm.estimation import SharedStateEstimator, SharedStateEstimatorConfig
 from swarm.ra.margins import RuntimeAssuranceParams
 from swarm.ra.runtime_assurance import RuntimeAssurance
+from swarm.safety import DroneSnapshot
 
 
 class Phase5CommandEncodingTest(unittest.TestCase):
@@ -172,6 +175,28 @@ class Phase6FaultInjectionTest(unittest.TestCase):
         run = self._run({"telemetry_stale_ms": 3000})
         self.assertFalse(run["collision"])
         self.assertGreater(run["rejected_reasons"].get("telemetry_stale", 0), 0)
+
+
+class EstimatorWiringTest(unittest.TestCase):
+    def test_estimated_states_and_aoi_uses_estimator_age(self) -> None:
+        estimator = SharedStateEstimator(
+            SharedStateEstimatorConfig(delay_ms=100)
+        )
+        snapshots = {
+            2: DroneSnapshot(
+                drone_id=2, position=(0.0, 0.0, 0.0), velocity=(0.0, 0.0, 0.0)
+            ),
+            3: DroneSnapshot(
+                drone_id=3, position=(1.0, 0.0, 0.0), velocity=(0.0, 0.0, 0.0)
+            ),
+        }
+        estimator.step(snapshots, now_ms=0, rng=None)
+        estimator.step(snapshots, now_ms=100, rng=None)
+        estimated, aoi = _estimated_states_and_aoi(
+            snapshots, estimator, now_ms=200, rng=None
+        )
+        self.assertEqual(estimated[2].timestamp_ms, 100)
+        self.assertAlmostEqual(aoi[(2, 3)], 0.1)
 
 
 if __name__ == "__main__":
