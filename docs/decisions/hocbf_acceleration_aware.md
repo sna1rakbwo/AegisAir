@@ -146,10 +146,22 @@ HOCBF k=3 + ASYNC rule  -0.0066    False      True       4
 的离散化缺口。相比纯 HOCBF 的 deadlock，以及侧向/让行策略，这是当前最接近
 `rho>=0` 且完成的结果。
 
+小 `dt` 复测（HOCBF + ASYNC rule，固定总仿真时长）：
+
+```text
+dt     k=2.5       k=3.0       k=3.5
+0.1    -0.0163     -0.0066     -0.0140
+0.05   -0.0027     -0.0029     -0.0031
+0.02   -0.0073     -0.0038     -0.0035
+```
+
+`dt=0.05` 把缺口压到约 0.27%，但 `dt=0.02` 不再单调改善；剩余缺口不是单纯
+`dt`，还包含离散时间 barrier / LLM recovery maneuver 的残差。
+
 ## 7. 下一步
 
-1. 关闭剩余 0.66% 离散化缺口：换更小 `dt`、离散时间 CBF，或显式记录该
-   `epsilon` violation（不声称连续时间严格保证）。
+1. 关闭剩余约 0.27% 缺口：离散时间 CBF 或显式记录 `epsilon` violation
+   （不声称连续时间严格保证）。
 2. 用真实 `MlxLmClient` 替换 rule 版复测，确认 LLM 能产出合法 YIELD/REROUTE。
 3. 轻量 sim 的 CBF vs HOCBF 对比表（min_rho / violation / collision /
    intervention / control effort / mission time）。
