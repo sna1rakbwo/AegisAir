@@ -80,6 +80,18 @@ class RuntimeAssurance:
             self.trackers[key] = PairMarginTracker(self.params)
         return self.trackers[key]
 
+    def _pair_sigmas(self, snap_i, snap_j) -> tuple[float, float]:
+        """Project each estimate's covariance onto the pair line-of-sight."""
+        p_i = np.asarray(snap_i.position[:2], dtype=np.float64)
+        p_j = np.asarray(snap_j.position[:2], dtype=np.float64)
+        delta = p_i - p_j
+        dist = float(np.linalg.norm(delta))
+        direction = delta / dist if dist > 1e-9 else np.array([1.0, 0.0])
+        return (
+            _projected_sigma(snap_i, direction, self.perception_sigma),
+            _projected_sigma(snap_j, direction, self.perception_sigma),
+        )
+
     def filter(
         self,
         snapshots: dict[int, object],
@@ -125,10 +137,11 @@ class RuntimeAssurance:
                 distance = float(np.linalg.norm(p_i - p_j))
                 v_cl = closing_speed(snapshot.position, other.position, snapshot.velocity or (0.0, 0.0, 0.0), other.velocity or (0.0, 0.0, 0.0))
                 pair_aoi = aoi.get((drone_id, other_id), 0.0)
+                sigma_i, sigma_j = self._pair_sigmas(snapshot, other)
                 d_safe = dynamic_safety_boundary(
                     closing_speed=v_cl,
-                    perception_sigma_i=self.perception_sigma,
-                    perception_sigma_j=self.perception_sigma,
+                    perception_sigma_i=sigma_i,
+                    perception_sigma_j=sigma_j,
                     aoi=pair_aoi,
                     params=self.params,
                 )
@@ -151,8 +164,8 @@ class RuntimeAssurance:
                     p_j=other.position,
                     v_i=snapshot.velocity or (0.0, 0.0, 0.0),
                     v_j=other.velocity or (0.0, 0.0, 0.0),
-                    sigma_i=self.perception_sigma,
-                    sigma_j=self.perception_sigma,
+                    sigma_i=sigma_i,
+                    sigma_j=sigma_j,
                     aoi=pair_aoi,
                     params=self.params,
                     horizon=self.params.prediction_horizon,
@@ -252,11 +265,12 @@ class RuntimeAssurance:
                 snap_i = snapshots[i]
                 snap_j = snapshots[j]
                 pair_aoi = aoi.get((i, j), aoi.get((j, i), 0.0))
+                sigma_i, sigma_j = self._pair_sigmas(snap_i, snap_j)
                 v_cl_now = _closing_speed_2d(
                     positions[i], positions[j], velocities[i], velocities[j]
                 )
                 s_now[(i, j)] = _d_safe_2d(
-                    v_cl_now, pair_aoi, self.perception_sigma, self.params
+                    v_cl_now, pair_aoi, sigma_i, sigma_j, self.params
                 )
 
                 v_pred_i = velocities[i] + a_nom[i] * dt
@@ -265,7 +279,7 @@ class RuntimeAssurance:
                     positions[i], positions[j], v_pred_i, v_pred_j
                 )
                 s_next[(i, j)] = _d_safe_2d(
-                    v_cl_next, pair_aoi, self.perception_sigma, self.params
+                    v_cl_next, pair_aoi, sigma_i, sigma_j, self.params
                 )
 
                 distance = float(np.linalg.norm(positions[i] - positions[j]))
@@ -279,8 +293,8 @@ class RuntimeAssurance:
                     p_j=snap_j.position,
                     v_i=snap_i.velocity or (0.0, 0.0, 0.0),
                     v_j=snap_j.velocity or (0.0, 0.0, 0.0),
-                    sigma_i=self.perception_sigma,
-                    sigma_j=self.perception_sigma,
+                    sigma_i=sigma_i,
+                    sigma_j=sigma_j,
                     aoi=pair_aoi,
                     params=self.params,
                     horizon=self.params.prediction_horizon,
@@ -363,6 +377,18 @@ class RuntimeAssurance:
         return results
 
 
+def _projected_sigma(snapshot, direction: np.ndarray, default: float) -> float:
+    """Return the covariance-derived sigma along ``direction``, or the default."""
+    cov = getattr(snapshot, "covariance", None)
+    if cov is None:
+        return default
+    P = np.asarray(cov, dtype=np.float64).reshape(2, 2)
+    variance = float(direction @ P @ direction)
+    if variance <= 0.0:
+        return 0.0
+    return float(np.sqrt(variance))
+
+
 def _closing_speed_2d(
     p_i: np.ndarray,
     p_j: np.ndarray,
@@ -380,13 +406,14 @@ def _closing_speed_2d(
 def _d_safe_2d(
     closing_speed: float,
     aoi: float,
-    perception_sigma: float,
+    sigma_i: float,
+    sigma_j: float,
     params: RuntimeAssuranceParams,
 ) -> float:
     return (
         params.d0
         + dynamics_margin(closing_speed, params)
-        + perception_margin(perception_sigma, perception_sigma, params)
+        + perception_margin(sigma_i, sigma_j, params)
         + communication_margin(aoi, params)
     )
 

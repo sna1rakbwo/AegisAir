@@ -1,9 +1,9 @@
-# Phase 6 —— 故障注入：前两道本地冻结闸门
+# Phase 6 —— 故障注入：本地冻结闸门
 
 > 日期：2026-08-16
-> 状态：本地闸门已跑通，进入 live PX4 前
+> 状态：三道本地闸门已跑通，进入 live PX4 前
 > 前置：Phase 5 已达成 head-on / crossing / multi-UAV 的 `min_rho >= 0`
-> 基线：104 个主测试 + 41 个 `px4_adapter` 测试全绿
+> 基线：111 个主测试 + 41 个 `px4_adapter` 测试全绿
 
 ## 1. 目标（来自 plan.md Phase 6）
 
@@ -20,7 +20,7 @@
 约定不变：不放松阈值、不加 seed 救失败假设；`Assume AI can fail`，Runtime
 Assurance 保留最终硬安全。
 
-## 2. 本阶段完成的两道闸门
+## 2. 本阶段完成的本地闸门
 
 ### 2.1 闸门 A：adapter 本地 fail-closed 冻结
 
@@ -81,6 +81,34 @@ Assurance 保留最终硬安全。
 - `STALE_TELEMETRY` 下 `completed=0`：3s AoI 使 `d_safe` 显著增大，RA 极保守，
   使命停滞；真实 PX4 中 adapter 会 fail-closed（LAND），本闸门未闭环该动作。
 
+### 2.3 闸门 C：SharedStateEstimator 本地闸门（新增）
+
+- 入口：`marllib/phase6_estimator_scan.py`
+- 协议：`safedrones-aegisair-phase6-estimator-local-v1`
+- 架构依据：`docs/decisions/phase6_shared_state_estimator.md`
+- 实现：`swarm/estimation.py`（`SharedStateEstimator` + `EstimatedState`）；
+  RA 用 covariance 在连线方向的投影替代固定 `perception_sigma`。
+
+配置：`NONE / DELAY_300MS / DELAY_2000MS / DROPOUT_30 / COV_HIGH`，
+种子 `1..10`，`head_on`，sampled-data `gamma=0.1`，`max_steps=300`。
+
+结果（50 episodes，5 项 stop rules 全过）：
+
+| config | collision | completed | perceived min_rho | mean age ms | mean cov m2 |
+| --- | --- | --- | --- | --- | --- |
+| NONE | 0 | 10/10 | 0.542 | 0 | 0.010 |
+| DELAY_300MS | 0 | 10/10 | 0.591 | 289 | 0.010 |
+| DELAY_2000MS | 0 | 0/10 | -0.705 | 1733 | 0.010 |
+| DROPOUT_30 | 0 | 10/10 | 0.042 ~ 0.504 | 21 | 0.0104 |
+| COV_HIGH | 0 | 0/10 | 0.230 | 0 | 0.250 |
+
+观察（与架构决策一致）：
+
+- delay 只抬 age（`M_comm`），covariance 保持 base；
+- dropout 抬 covariance（hold + 增长）；
+- 高 covariance 使 `min_rho` 下降且 300 步内使命不完成（RA 更保守，fail-safe）；
+- 2s delay 下 perceived `min_rho` 为负，但 ground-truth `collision=0`。
+
 ## 3. 冻结的 stop rules（闸门 B）
 
 ```text
@@ -92,13 +120,25 @@ llm_timeout_fallback        LLM_TIMEOUT llm_timeouts>0 且 fallback>0
 invalid_llm_fallback        INVALID_LLM_COMMAND llm_schema_invalid>0 且 fallback>0
 ```
 
+### 3.1 冻结的 stop rules（闸门 C）
+
+```text
+no_collision                 所有 episode collision == false
+baseline_min_rho_ge_0        NONE 的 perceived min_rho >= 0
+delay_increases_age          DELAY_300MS mean_age > NONE mean_age
+dropout_increases_covariance DROPOUT_30 mean_cov > NONE mean_cov
+high_covariance_reduces_min_rho COV_HIGH min_rho < NONE min_rho
+```
+
 ## 4. 声明边界（不要过度声称）
 
-这两道闸门只验证**确定性决策路径**：
+这三道闸门只验证**确定性决策路径**：
 
 - 闸门 A 验证 adapter 的 fail-closed **决策**，不验证 PX4 飞行安全；
 - 闸门 B 验证 RA + adapter **决策**和 recovery-layer **fallback 路径**，
   **不闭环** adapter fail-closed 后的飞行器动作。
+- 闸门 C 验证 `SharedStateEstimator -> RA` 的**决策路径**，不验证真实
+  PX4 telemetry 的 delay/dropout 分布，也不闭环飞行器动作。
 
 `min_rho` 是 RA 在**感知状态**上算出的归一化安全裕度；`collision` 是环境
 **真实状态**。因此 `PERCEPTION_NOISE` / `STALE_TELEMETRY` 下 perceived
@@ -119,9 +159,11 @@ Go，但需先处理内存压力：
 
 ## 6. 下一步
 
-1. 单机 live 故障注入（packet loss / stale telemetry / latency），复用
+1. 把 `SharedStateEstimator` 接入 live 路径（MQTT telemetry -> estimator ->
+   RA），用真实 delay/dropout 验证本地闸门 C 的映射是否成立。
+2. 单机 live 故障注入（packet loss / stale telemetry / latency），复用
    `px4_adapter/p5/live_command_fault_scan.py` 的 frozen 协议。
-2. 4 机 sampled-data + SEQUENTIAL_PASS 下注入故障，观察
+3. 4 机 sampled-data + SEQUENTIAL_PASS 下注入故障，观察
    `min_rho`、真实 `collision`、完成率，以及 LLM timeout / invalid command
    是否仍被 validator + fallback 兜住。
-3. 若 live 结果与本地闸门不一致，回查 adapter 闭环路径，不放松阈值。
+4. 若 live 结果与本地闸门不一致，回查 estimator / adapter 闭环路径，不放松阈值。
