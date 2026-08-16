@@ -149,24 +149,18 @@ Phase 5 的「`min_rho >= 0`」只适用于无故障基线；故障下的硬安�
 
 ## 5. Go/No-Go：进入 live PX4 故障注入
 
-Go，但需先处理内存压力：
-
-- 本机 16GB，Phase 5 已知 4 机 PX4 偶发 `Killed: 9` 或单实例挂死；
-- live 前先释放内存，按最低成本顺序：单机 packet loss / stale / latency →
-  4 机 sampled-data + SEQUENTIAL_PASS 故障注入；
-- live 结果同样落到
-  `/Volumes/Expansion/aegisair_phase6_20260816/`。
+Go。本次实测 `memory_pressure` 报 76% free（约 12GB 可用），4 机 PX4 未出现
+`Killed: 9`；但 Phase 5 曾记录过 4 机内存压力，后续大负载仍要留意。
+live 结果同样落到 `/Volumes/Expansion/aegisair_phase6_20260816/`。
 
 ## 6. 下一步
 
 1. ~~把 `SharedStateEstimator` 接入 live 路径~~（已完成：`phase5_runner.py`
    新增 `--estimator` 系列参数，MQTT telemetry -> estimator -> RA）。
 2. ~~单机 live 故障注入（command loss / latency）~~（已完成，见下）。
-3. 4 机 sampled-data + SEQUENTIAL_PASS 下注入故障，观察
-   `min_rho`、真实 `collision`、完成率，以及 LLM timeout / invalid command
-   是否仍被 validator + fallback 兜住。
-4. 单机 live stale telemetry 与 4 机 live 完成后，若结果与本地闸门不一致，
-   回查 estimator / adapter 闭环路径，不放松阈值。
+3. ~~4 机 sampled-data + SEQUENTIAL_PASS 下注入 delay / dropout~~（已完成，
+   见下；LLM timeout / invalid command 仍待 live 兜底验证）。
+4. 若 live 结果与本地闸门不一致，回查 estimator / adapter 闭环路径，不放松阈值。
 
 ## 7. live 单机 command-loss / latency 结果（2026-08-16）
 
@@ -187,3 +181,21 @@ Go，但需先处理内存压力：
 结论：真实 PX4 + adapter 闭环下，fresh command 被接受、1100ms 过期命令 100%
 fail-closed（`command_expired`）、packet loss 单调下降（18/27/41），与本地
 闸门 A 一致。
+
+## 8. live 4 机 sampled-data + SEQUENTIAL_PASS 结果（2026-08-16）
+
+实时栈：broker + `launch_multi_sitl_pose.sh S1 2,3,4,5` +
+`aegisair-px4-bridge`（4 实例 `--no-read-only`，20Hz）+ 4 GCS heartbeat。
+入口：`phase5_runner.py --mqtt --scenario multi_uav --drone-ids 2,3,4,5
+--sampled-data --gamma 0.1 --tau-ctrl 0.2 --sequential-pass --urgent-drone 4
+--llm rule`。故障通过 `--estimator` 注入（SharedStateEstimator）。
+
+| config | min_rho | min_distance_m | cbf_events |
+| --- | --- | --- | --- |
+| baseline | 0.236 | 1.19 | 210 |
+| stale 500ms | -0.225 | 1.93 | 1290 |
+| dropout 30% | 0.238 | 1.83 | 32 |
+
+结论：三种配置真实 `min_distance_m` 均 > 0.25m（无碰撞）。500ms stale 使
+perceived `min_rho` 转负、CBF 干预从 210 升至 1290（fail-safe，更保守）；
+30% dropout 下协方差增长很小，`min_rho` 仍为正，退化不显著。
