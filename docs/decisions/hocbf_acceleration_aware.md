@@ -288,6 +288,21 @@ worst rho                -0.807 @ t=5.2 s, min distance 0.31 m
    velocity-tracking compensator。
 3. 若仍失败，上 discrete-time CBF，用 PX4 速度跟踪模型离散化 barrier。
 
+## 10. 修复 1+2 后复测（仍 No-Go）
+
+固定速率 deadline + `tau_ctrl=0.2` 后：
+
+```text
+actual loop dt   = 0.050 s => 20.0 Hz（原 7.8 Hz）
+tracking error   = mean 0.102 m/s, p90 0.141（原 0.285 / 0.364）
+min_rho          = -0.7598（原 -0.8072，基本未改善）
+min_distance_m   = 0.375（仍 near collision）
+```
+
+控制率和跟踪误差都修好了，但 `min_rho` 仍约 `-0.76`。说明 remaining root
+cause 不是控制率，而是**连续时间 HOCBF + sample-and-hold d_safe + velocity-mode
+跟踪**在真实 4 机 PX4 上不成立。按诊断进入第 3 项：discrete-time CBF。
+
 ## 8. 主张边界
 
 当前只证明 HOCBF 已实现且 2 机 sim 安全完成；4 机 sim 尚未解决 deadlock，
