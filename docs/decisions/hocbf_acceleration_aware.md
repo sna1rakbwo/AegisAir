@@ -179,13 +179,36 @@ kv = 2.0
 
 对应结果：`collision=0`、`mission completed`、`min_rho≈-0.0029`。
 
+## 6.4 CBF vs HOCBF 首轮统计（N=5，dt=0.05）
+
+```text
+scenario   metric              velocity-CBF   HOCBF(+ASYNC rule for 4UAV)
+head_on    collision_rate      0.0            0.0
+           completion_rate     1.0            1.0
+           mean_mission_steps  138.0          127.0
+           mean_cbf_events     154.0          92.0
+           min_rho             0.599          0.348
+           violation_rate      0.0            0.0
+
+multi_uav  collision_rate      0.0            0.0
+           completion_rate     1.0            1.0
+           mean_mission_steps  170.0          357.0
+           mean_cbf_events     512.0          996.0
+           min_rho             -0.0103        -0.0029
+           violation_rate      1.0            1.0
+```
+
+解读：
+
+- 2 机：HOCBF 更快、干预更少，且 `rho>0`，说明它在松场景用安全裕度更高效。
+- 4 机：HOCBF 把最小安全裕度违反从 1.03% 压到 0.29%（3.5×），代价是 mission
+  时间变长、干预变多；LLM 死锁解除让完成率保持 1.0。
+
 ## 7. 下一步
 
-1. 用真实 `MlxLmClient` 替换 rule 版复测，确认 LLM 能产出合法 YIELD/REROUTE。
-2. 2 机/4 机多次重复出统计（`min_rho`、violation、collision、intervention、
-   mission time）。
-3. imperfect MARL 下的 HOCBF 保护。
-4. 接 PX4/Gazebo velocity-mode，观察 `epsilon_impl` 是否被放大；若放大到
+1. 把 N 提到 10，补 control effort（`mean |a_safe|`）与 4 机真实 Qwen 对比。
+2. imperfect MARL 下的 HOCBF 保护。
+3. 接 PX4/Gazebo velocity-mode，观察 `epsilon_impl` 是否被放大；若放大到
    `-0.05~-0.1` 或出现 near collision，再重新考虑 discrete-time CBF。
 
 ## 8. 主张边界
