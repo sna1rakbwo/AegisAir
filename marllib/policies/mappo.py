@@ -261,3 +261,80 @@ class MAPPO:
     def load_state_dict(self, state: dict[str, dict[str, torch.Tensor]]) -> None:
         self.actor.load_state_dict(state["actor"])
         self.critic.load_state_dict(state["critic"])
+
+
+class MappoPilot:
+    """Deterministic checkpoint actor for closed-loop nominal control.
+
+    Builds the same flattened relative observation as ``MultiUAVEnv`` and
+    returns the shared actor's deterministic velocity command for every agent.
+    """
+
+    def __init__(
+        self,
+        checkpoint,
+        *,
+        obs_dim: int,
+        num_agents: int,
+        speed_limit: float,
+        max_neighbors: int = 8,
+        device: str = "cpu",
+    ) -> None:
+        self.max_neighbors = max_neighbors
+        self.num_agents = num_agents
+        self.speed_limit = speed_limit
+        self.device = device
+        self.model = MAPPO(obs_dim, 2, num_agents * 6, speed_limit)
+        self.model.load_state_dict(
+            torch.load(str(checkpoint), weights_only=False)
+        )
+        self.model.actor.to(device)
+        self.model.actor.eval()
+
+    @torch.no_grad()
+    def actions(
+        self,
+        positions: dict[int, np.ndarray],
+        velocities: dict[int, np.ndarray],
+        goals: dict[int, np.ndarray],
+    ) -> dict[int, np.ndarray]:
+        agent_ids = sorted(positions)
+        actions: dict[int, np.ndarray] = {}
+        for agent_id in agent_ids:
+            obs = self._observation(
+                agent_id, agent_ids, positions, velocities, goals
+            )
+            obs_t = torch.from_numpy(obs).float().unsqueeze(0).to(self.device)
+            action = self.model.actor.deterministic(obs_t).squeeze(0).cpu().numpy()
+            actions[agent_id] = action
+        return actions
+
+    def _observation(
+        self,
+        agent_id: int,
+        agent_ids: list[int],
+        positions: dict[int, np.ndarray],
+        velocities: dict[int, np.ndarray],
+        goals: dict[int, np.ndarray],
+    ) -> np.ndarray:
+        pos = np.asarray(positions[agent_id][:2], dtype=np.float32)
+        vel = np.asarray(velocities[agent_id][:2], dtype=np.float32)
+        goal = np.asarray(goals[agent_id][:2], dtype=np.float32)
+        obs: list[float] = [vel[0], vel[1], goal[0] - pos[0], goal[1] - pos[1]]
+
+        neighbors = []
+        for other_id in agent_ids:
+            if other_id == agent_id:
+                continue
+            p_other = np.asarray(positions[other_id][:2], dtype=np.float32)
+            v_other = np.asarray(velocities[other_id][:2], dtype=np.float32)
+            rel_pos = p_other - pos
+            rel_vel = v_other - vel
+            dist = float(np.linalg.norm(rel_pos))
+            neighbors.append((dist, rel_pos, rel_vel))
+        neighbors.sort(key=lambda item: item[0])
+        for _, rel_pos, rel_vel in neighbors[: self.max_neighbors]:
+            obs.extend([rel_pos[0], rel_pos[1], rel_vel[0], rel_vel[1], 1.0])
+        while len(obs) < 4 + 5 * self.max_neighbors:
+            obs.append(0.0)
+        return np.asarray(obs, dtype=np.float32)

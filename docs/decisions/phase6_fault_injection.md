@@ -211,3 +211,17 @@ LLM 故障（`--mode ASYNC` + `--llm timeout|invalid`）：
 
 两组均无碰撞，验证 validator + fallback 在 live 4 机闭环下兜住 LLM
 timeout / invalid command。
+
+## 9. MAPPO nominal pilot 接入（缺口 #1 补齐，2026-08-16）
+
+- 新增 `marllib/policies/mappo.py:MappoPilot`（确定性 checkpoint actor，
+  观测格式与 `MultiUAVEnv.observation` 一致）。
+- `phase5_runner.py` 新增 `--pilot go_to_goal|checkpoint` + `--checkpoint`，
+  sim 与 live MQTT 闭环都可把 MAPPO 作为 nominal pilot。
+- 验证：
+  - sim head_on + `head_on/seed1/final.pt`：无碰撞，`min_rho=0.605`。
+  - live 4 机 + `randomized_4/seed1/final.pt`：无碰撞
+    （`min_distance=0.42m`），`min_rho=-0.653`，`cbf_events=344`。
+- 结论：MAPPO 已作为 nominal pilot 接入 PX4 闭环；`randomized_4` 在固定
+  multi_uav 交叉下比 rule-based 更激进（min_rho 更负、距离更近），这正是
+  Phase 7 policy-quality robustness 要量化的对象。

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import tempfile
 import unittest
 
 import numpy as np
+import torch
 
 from marllib.config import (
     RewardConfig,
@@ -16,6 +18,7 @@ from marllib.config import (
 )
 from marllib.envs.multi_uav import MultiUAVEnv
 from marllib.envs.vectorized import VectorizedMultiUAVEnv
+from marllib.policies.mappo import MAPPO, MappoPilot
 from marllib.reward import per_agent_reward
 
 
@@ -128,6 +131,51 @@ class EnvironmentTest(unittest.TestCase):
         v_obs = vec.observations()[0]
         for idx, agent in enumerate(single.agent_ids):
             np.testing.assert_allclose(s_obs[agent], v_obs[idx], rtol=1e-5, atol=1e-5)
+
+
+class MappoPilotTest(unittest.TestCase):
+    def test_observation_matches_env_and_actions_bounded(self) -> None:
+        scenario = ScenarioConfig(
+            name="t",
+            num_agents=3,
+            starts=((-1.0, 0.0), (0.0, 0.0), (1.0, 0.0)),
+            goals=((1.0, 0.0), (0.0, 1.0), (-1.0, 0.0)),
+            max_neighbors=2,
+        )
+        env = MultiUAVEnv(scenario)
+        env.reset(seed=0)
+        env.step({i: np.array([0.1, 0.2]) for i in env.agent_ids})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            checkpoint = f"{tmp}/final.pt"
+            model = MAPPO(env.obs_dim, 2, env.num_agents * 6, scenario.speed_limit)
+            torch.save(model.state_dict(), checkpoint)
+            pilot = MappoPilot(
+                checkpoint,
+                obs_dim=env.obs_dim,
+                num_agents=env.num_agents,
+                speed_limit=scenario.speed_limit,
+                max_neighbors=scenario.max_neighbors,
+            )
+
+            positions = {i: env.positions[i] for i in env.agent_ids}
+            velocities = {i: env.velocities[i] for i in env.agent_ids}
+            goals = {i: env.goals[i] for i in env.agent_ids}
+
+            for i in env.agent_ids:
+                np.testing.assert_allclose(
+                    pilot._observation(i, env.agent_ids, positions, velocities, goals),
+                    env.observation(i),
+                    rtol=1e-6,
+                    atol=1e-6,
+                )
+
+            actions = pilot.actions(positions, velocities, goals)
+            for i in env.agent_ids:
+                self.assertLessEqual(
+                    float(np.linalg.norm(actions[i])),
+                    scenario.speed_limit + 1e-6,
+                )
 
 
 if __name__ == "__main__":

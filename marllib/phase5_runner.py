@@ -30,6 +30,7 @@ if str(ROOT) not in sys.path:
 
 from marllib.config import ScenarioConfig
 from marllib.envs.multi_uav import MultiUAVEnv
+from marllib.policies.mappo import MappoPilot
 from px4_adapter.mqtt_codec import (
     TelemetryState,
     decode_command,
@@ -408,17 +409,34 @@ def _go_to_goal(
     overrides: RecoveryOverrides,
     failed: set[int],
     aborted: set[int],
+    pilot: MappoPilot | None = None,
 ) -> dict[int, np.ndarray]:
-    actions: dict[int, np.ndarray] = {}
+    if pilot is not None:
+        positions = {i: env.positions[i] for i in env.agent_ids}
+        velocities = {i: env.velocities[i] for i in env.agent_ids}
+        goals = {
+            i: np.asarray(overrides.goal_override.get(i, base_goals[i])[:2])
+            for i in env.agent_ids
+        }
+        actions = pilot.actions(
+            positions=positions, velocities=velocities, goals=goals
+        )
+    else:
+        actions = {}
+        for i in env.agent_ids:
+            goal = overrides.goal_override.get(i, base_goals[i])
+            delta = np.asarray(goal[:2]) - env.positions[i]
+            actions[i] = np.clip(
+                NOMINAL_GAIN * delta,
+                -env.scenario.speed_limit,
+                env.scenario.speed_limit,
+            )
+
     for i in env.agent_ids:
         if i in failed or i in aborted:
             actions[i] = np.zeros(2)
             continue
-        goal = overrides.goal_override.get(i, base_goals[i])
-        delta = np.asarray(goal[:2]) - env.positions[i]
-        speed = NOMINAL_GAIN * delta
-        actions[i] = np.clip(speed, -env.scenario.speed_limit, env.scenario.speed_limit)
-        actions[i] = actions[i] * overrides.velocity_scale.get(i, 1.0)
+        actions[i] = np.asarray(actions[i], dtype=np.float64) * overrides.velocity_scale.get(i, 1.0)
     return actions
 
 
@@ -526,6 +544,7 @@ def run_sim_episode(
     urgent_drone: int | None = None,
     fault: dict[str, Any] | None = None,
     replan_timeout_s: float | None = None,
+    pilot: MappoPilot | None = None,
 ) -> dict[str, Any]:
     env.reset(seed=seed)
     fault = fault or {}
@@ -600,6 +619,7 @@ def run_sim_episode(
             overrides=overrides,
             failed=failed,
             aborted=aborted,
+            pilot=pilot,
         )
         if sequential_pass:
             for i in env.agent_ids:
@@ -831,6 +851,7 @@ def run_mqtt_loop(
     estimator_config: SharedStateEstimatorConfig | None = None,
     estimator_seed: int = 0,
     replan_timeout_s: float | None = None,
+    pilot: MappoPilot | None = None,
 ) -> dict[str, Any]:
     """Live PX4 loop: arm/takeoff, then RA-filtered closed-loop control.
 
@@ -1038,20 +1059,38 @@ def run_mqtt_loop(
                         if seq_state["idx"] >= len(seq_state["order"]):
                             seq_state["active"] = False
 
-            nominal: dict[int, np.ndarray] = {}
+            if pilot is not None:
+                positions = {
+                    i: np.asarray(snapshots[i].position) for i in drone_ids
+                }
+                velocities = {
+                    i: np.asarray(snapshots[i].velocity or (0.0, 0.0, 0.0))
+                    for i in drone_ids
+                }
+                goals = {
+                    i: np.asarray(overrides.goal_override.get(i, base_goals[i])[:2])
+                    for i in drone_ids
+                }
+                nominal = pilot.actions(
+                    positions=positions, velocities=velocities, goals=goals
+                )
+            else:
+                nominal = {}
+                for i in drone_ids:
+                    snap = snapshots[i]
+                    goal = overrides.goal_override.get(i, base_goals[i])
+                    delta = np.asarray(goal[:2]) - np.asarray(snap.position[:2])
+                    nominal[i] = np.clip(
+                        NOMINAL_GAIN * delta,
+                        -ra.v_max,
+                        ra.v_max,
+                    )
+
             for i in drone_ids:
-                snap = snapshots[i]
                 if i in overrides.aborted:
                     nominal[i] = np.zeros(2)
                     continue
-                goal = overrides.goal_override.get(i, base_goals[i])
-                delta = np.asarray(goal[:2]) - np.asarray(snap.position[:2])
-                nominal[i] = np.clip(
-                    NOMINAL_GAIN * delta,
-                    -ra.v_max,
-                    ra.v_max,
-                )
-                nominal[i] = nominal[i] * overrides.velocity_scale.get(i, 1.0)
+                nominal[i] = np.asarray(nominal[i], dtype=np.float64) * overrides.velocity_scale.get(i, 1.0)
 
             # The CBF boundary grows with the age of the telemetry used for
             # filtering.  Feed the measured round-trip age instead of assuming
@@ -1231,6 +1270,17 @@ def main() -> int:
         default="/Users/lijiajun/.cache/aegisair-qwen3-4b-4bit-bench",
     )
     parser.add_argument("--qwen-max-tokens", type=int, default=48)
+    parser.add_argument(
+        "--pilot",
+        choices=["go_to_goal", "checkpoint"],
+        default="go_to_goal",
+        help="Nominal pilot: rule-based go-to-goal or a trained MAPPO checkpoint.",
+    )
+    parser.add_argument(
+        "--checkpoint",
+        default=None,
+        help="MAPPO final.pt path (required with --pilot checkpoint).",
+    )
     parser.add_argument("--seeds", type=int, default=1)
     parser.add_argument("--max-steps", type=int, default=120)
     parser.add_argument(
@@ -1320,6 +1370,20 @@ def main() -> int:
     spec = _scenario(args.scenario)
     if args.dt is not None:
         spec["scenario"] = replace(spec["scenario"], dt=args.dt)
+
+    if args.pilot == "checkpoint":
+        if not args.checkpoint:
+            parser.error("--checkpoint is required with --pilot checkpoint")
+        pilot = MappoPilot(
+            args.checkpoint,
+            obs_dim=4 + 5 * spec["scenario"].max_neighbors,
+            num_agents=spec["scenario"].num_agents,
+            speed_limit=spec["scenario"].speed_limit,
+            max_neighbors=spec["scenario"].max_neighbors,
+        )
+    else:
+        pilot = None
+
     if args.llm == "rule":
         llm_client = RuleMissionPlanner()
         llm_fallback = None
@@ -1420,6 +1484,7 @@ def main() -> int:
                     estimator_config=estimator_config,
                     estimator_seed=args.estimator_seed,
                     replan_timeout_s=args.replan_timeout_s,
+                    pilot=pilot,
                 )
                 seed_results.append(
                     {
@@ -1482,6 +1547,7 @@ def main() -> int:
                 estimator_config=estimator_config,
                 estimator_seed=args.estimator_seed,
                 replan_timeout_s=args.replan_timeout_s,
+                pilot=pilot,
             )
             episodes.append(result)
             print(
@@ -1538,6 +1604,7 @@ def main() -> int:
             nominal_noise=args.nominal_noise,
             sequential_pass=args.sequential_pass,
             urgent_drone=args.urgent_drone,
+            pilot=pilot,
         )
         runs.append(run)
 
