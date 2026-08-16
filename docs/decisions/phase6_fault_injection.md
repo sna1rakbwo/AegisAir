@@ -161,9 +161,29 @@ Go，但需先处理内存压力：
 
 1. ~~把 `SharedStateEstimator` 接入 live 路径~~（已完成：`phase5_runner.py`
    新增 `--estimator` 系列参数，MQTT telemetry -> estimator -> RA）。
-2. 单机 live 故障注入（packet loss / stale telemetry / latency），复用
-   `px4_adapter/p5/live_command_fault_scan.py` 的 frozen 协议。
+2. ~~单机 live 故障注入（command loss / latency）~~（已完成，见下）。
 3. 4 机 sampled-data + SEQUENTIAL_PASS 下注入故障，观察
    `min_rho`、真实 `collision`、完成率，以及 LLM timeout / invalid command
    是否仍被 validator + fallback 兜住。
-4. 若 live 结果与本地闸门不一致，回查 estimator / adapter 闭环路径，不放松阈值。
+4. 单机 live stale telemetry 与 4 机 live 完成后，若结果与本地闸门不一致，
+   回查 estimator / adapter 闭环路径，不放松阈值。
+
+## 7. live 单机 command-loss / latency 结果（2026-08-16）
+
+实时栈：broker + `launch_isolated_sitl.sh S1`（单 PX4 instance 2）+
+`aegisair-px4-bridge`（单实例，`--no-read-only`，20Hz）+ GCS heartbeat。
+入口：`px4_adapter/p5/live_command_fault_scan.py`，frozen 协议
+`safedrones-px4-adapter-p5-live-command-v1`，10 seeds。
+
+| fault | published | accepted | dropped | rejected（原因） |
+| --- | --- | --- | --- | --- |
+| NONE | 120 | 120 | 0 | 1（command_expired 边界） |
+| COMMAND_LOSS_10 | 102 | 102 | 18 | 1 |
+| COMMAND_LOSS_20 | 93 | 93 | 27 | 2 |
+| COMMAND_LOSS_30 | 79 | 79 | 41 | 1 |
+| COMMAND_LATENCY_100MS | 120 | 120 | 0 | 0 |
+| COMMAND_LATENCY_1100MS | 120 | 0 | 0 | 123（command_expired） |
+
+结论：真实 PX4 + adapter 闭环下，fresh command 被接受、1100ms 过期命令 100%
+fail-closed（`command_expired`）、packet loss 单调下降（18/27/41），与本地
+闸门 A 一致。
