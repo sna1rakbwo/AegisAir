@@ -390,6 +390,7 @@ def run_sim_episode(
     llm_fallback,
     max_steps: int,
     real_time: bool,
+    nominal_noise: float = 0.0,
 ) -> dict[str, Any]:
     env.reset(seed=seed)
     replanner = (
@@ -423,6 +424,8 @@ def run_sim_episode(
     high_reached_step = None
     cbf_events = 0
     min_rho = float("inf")
+    control_effort_sum = 0.0
+    control_effort_n = 0
     emitted_commands = 0
     rejected_commands = 0
 
@@ -448,10 +451,19 @@ def run_sim_episode(
             failed=failed,
             aborted=aborted,
         )
+        if nominal_noise > 0:
+            rng = np.random.default_rng(seed * 1_000_000 + step)
+            for i in env.agent_ids:
+                nominal[i] = nominal[i] + rng.normal(0.0, nominal_noise, 2)
         snapshots = _snapshots(env)
         results = ra.filter(snapshots, nominal, t=t)
         cbf_events += sum(1 for r in results.values() if r.intervened)
         min_rho = min(min_rho, min(r.safety_margin for r in results.values()))
+        for i in env.agent_ids:
+            control_effort_sum += float(
+                np.linalg.norm(np.asarray(results[i].safe_action) - nominal[i])
+            )
+            control_effort_n += 1
 
         if blocked_zone is not None:
             for i in env.agent_ids:
@@ -549,6 +561,11 @@ def run_sim_episode(
         "completion_steps": completion_step,
         "cbf_events": cbf_events,
         "min_rho": round(min_rho, 6) if min_rho != float("inf") else None,
+        "control_effort": (
+            round(control_effort_sum / control_effort_n, 4)
+            if control_effort_n
+            else None
+        ),
         "zone_crossed": zone_crossed,
         "critical_reached": critical_reached,
         "high_reached_step": high_reached_step,
@@ -586,6 +603,11 @@ def run_mqtt_loop(
     trajectory: Path | None = None,
     reset_starts: dict[int, tuple[float, float, float]] | None = None,
     rate_hz: float = 10.0,
+    use_hocbf: bool = False,
+    hocbf_k1: float = 3.0,
+    hocbf_k2: float = 3.0,
+    a_max: float = 2.0,
+    kv: float = 2.0,
 ) -> dict[str, Any]:
     """Live PX4 loop: arm/takeoff, then RA-filtered closed-loop control.
 
@@ -598,7 +620,14 @@ def run_mqtt_loop(
     except ModuleNotFoundError as exc:
         raise SystemExit("paho-mqtt is required for --mqtt mode") from exc
 
-    ra = RuntimeAssurance(v_max=1.5)
+    ra = RuntimeAssurance(
+        v_max=1.5,
+        use_hocbf=use_hocbf,
+        hocbf_k1=hocbf_k1,
+        hocbf_k2=hocbf_k2,
+        a_max=a_max,
+        kv=kv,
+    )
     replanner = (
         _make_replanner(
             client=llm_client,
@@ -896,6 +925,7 @@ def main() -> int:
     parser.add_argument("--hocbf-k2", type=float, default=1.0)
     parser.add_argument("--a-max", type=float, default=2.0)
     parser.add_argument("--kv", type=float, default=2.0)
+    parser.add_argument("--nominal-noise", type=float, default=0.0)
     parser.add_argument("--real-time", action="store_true")
     parser.add_argument("--mqtt", action="store_true")
     parser.add_argument(
@@ -1020,6 +1050,11 @@ def main() -> int:
                     trajectory=trajectory,
                     reset_starts=reset_starts,
                     rate_hz=args.rate_hz,
+                    use_hocbf=args.hocbf,
+                    hocbf_k1=args.hocbf_k1,
+                    hocbf_k2=args.hocbf_k2,
+                    a_max=args.a_max,
+                    kv=args.kv,
                 )
                 seed_results.append(
                     {
@@ -1069,6 +1104,11 @@ def main() -> int:
                 trajectory=trajectory,
                 reset_starts=reset_starts,
                 rate_hz=args.rate_hz,
+                use_hocbf=args.hocbf,
+                hocbf_k1=args.hocbf_k1,
+                hocbf_k2=args.hocbf_k2,
+                a_max=args.a_max,
+                kv=args.kv,
             )
             episodes.append(result)
             print(
@@ -1119,6 +1159,7 @@ def main() -> int:
             llm_fallback=llm_fallback,
             max_steps=args.max_steps,
             real_time=args.real_time,
+            nominal_noise=args.nominal_noise,
         )
         runs.append(run)
 

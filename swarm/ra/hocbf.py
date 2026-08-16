@@ -82,6 +82,7 @@ def solve_acceleration_qp(
     """
     drone_ids = sorted(positions)
     n_agents = len(drone_ids)
+    index = {drone: idx for idx, drone in enumerate(drone_ids)}
 
     x = np.zeros(2 * n_agents, dtype=np.float64)
     for idx, drone in enumerate(drone_ids):
@@ -90,8 +91,8 @@ def solve_acceleration_qp(
     halfspaces: list[tuple[np.ndarray, float]] = []
     for (i, j), s in d_safe.items():
         c, b = _pair_constraint(
-            i=i,
-            j=j,
+            i=index[i],
+            j=index[j],
             n_agents=n_agents,
             p_i=positions[i],
             p_j=positions[j],

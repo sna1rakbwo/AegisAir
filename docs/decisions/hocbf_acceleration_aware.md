@@ -204,6 +204,33 @@ multi_uav  collision_rate      0.0            0.0
 - 4 机：HOCBF 把最小安全裕度违反从 1.03% 压到 0.29%（3.5×），代价是 mission
   时间变长、干预变多；LLM 死锁解除让完成率保持 1.0。
 
+## 6.5 imperfect MARL（nominal noise=0.6，N=10，dt=0.05）
+
+```text
+scenario   metric      velocity-CBF  HOCBF(+ASYNC rule for 4UAV)
+head_on    min_rho     0.606         0.277
+           cbf_events  206.2         88.2
+multi_uav  min_rho     -0.0008       -0.0014
+           violation   0.1           0.1
+           cbf_events  507.6         331.8
+```
+
+所有场景 0 碰撞、完成率 1.0。HOCBF 在噪声 nominal 下显著降低干预次数
+（head_on 88 vs 206，multi_uav 332 vs 508），安全裕度保持同级。
+
+## 6.6 PX4/Gazebo 2 机 head-on（HOCBF live）
+
+velocity-mode offboard + HOCBF（k1=k2=3，20Hz）：
+
+```text
+min_rho = 0.2779  (> 0)
+min_distance_m = 1.7739
+cbf_events = 24
+```
+
+即 HOCBF 在真实 PX4/Gazebo 闭环中保持 `rho>0`。这是第一次 HOCBF 的 live 安全
+通过；4 机 PX4 版本与 `epsilon_impl` 放大观察留作后续。
+
 ## 7. 下一步
 
 1. 把 N 提到 10，补 control effort（`mean |a_safe|`）与 4 机真实 Qwen 对比。
