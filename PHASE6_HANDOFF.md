@@ -158,14 +158,50 @@ cd /Users/lijiajun/Documents/drone/AegisAir
    `min_rho`、collision、完成率、LLM timeout / invalid command 是否被 validator
    和 fallback 兜住。
 
+### 6.1 架构决策：保留 shared-state，但升级成“共享状态估计”
+
+当前 Phase 5 把 PX4 `vehicle_local_position` 直接当共享真值使用
+（`perception_sigma=0.1` 固定标量，delay 只进 `M_comm`，无 dropout 维持）。
+
+Phase 6 第一项实现改为：
+
+```text
+Retain centralized shared-state assumption;
+replace perfect shared ground truth with delayed, dropout-prone,
+covariance-bearing shared state estimates.
+```
+
+在 MQTT telemetry 与 Runtime Assurance 之间加 `SharedStateEstimator`：
+
+```text
+raw telemetry
+-> SharedStateEstimator（per-drone 状态估计：position/velocity/P/t_last/dropped）
+-> EstimatedState
+-> RA（用 covariance + AoI 计算 d_safe）
+```
+
+映射到现有 margin：
+
+- covariance -> `perception_margin(sigma_i, sigma_j)`，`sigma_i` 由协方差在
+  “两机连线方向”的投影替代；
+- delay -> 估计器实际输出延迟后的状态，同时 `M_comm` 继续用 age 放大；
+- dropout -> hold 上次 estimate + 协方差随时间增长（或 stale fail-closed）。
+
+这样 Phase 6 的 `perception noise / latency / stale telemetry` 就变成配置
+`SharedStateEstimator` 的 delay/dropout/noise 参数，而不是到处改代码。
+
+建议第一 gate：先在轻量 sim 里用 synthetic delay/dropout/covariance 验证 RA
+的 `min_rho` 与 fail-closed 行为，再上 live PX4。
+
 ## 7. 重要约定
 
 - 文档中文；代码/文档在仓库，checkpoint/结果/日志在外部盘。
-- 不放松阈值、不加 seed 救失败假设；不把 SITL/Gazebo 说成真实飞行。
+- 不放松阈值、不加 seed 救失败假设；
 - `Assume AI can fail`：LLM / MARL / Predictor 都不可信，Runtime Assurance
   保留最终硬安全。
 - 任何新消息格式先冻结到 `swarm/interfaces.py` 或 `px4_adapter/mqtt_codec.py`
   并加测试。
+- 有重大方向更新，需要在 `docs/decisions/` 中说明。
 
 ## 8. 新对话第一步建议
 
