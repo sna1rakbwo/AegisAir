@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import random
 import sys
 import time
 from pathlib import Path
@@ -875,6 +876,18 @@ def main() -> int:
     )
     parser.add_argument("--repetitions", type=int, default=1)
     parser.add_argument(
+        "--multi-seed",
+        type=int,
+        default=0,
+        help="Run one episode per seed 1..N with head-on lateral jitter.",
+    )
+    parser.add_argument(
+        "--lateral",
+        type=float,
+        default=None,
+        help="Head-on lateral offset for drone 2's goal y (drone 3 gets -y).",
+    )
+    parser.add_argument(
         "--starts",
         default=None,
         help="Semicolon-separated reset starts, e.g. 2=-3,0,2.5;3=3,0,2.5",
@@ -907,6 +920,9 @@ def main() -> int:
             drone: (float(g[0]), float(g[1]), CRUISE_ALTITUDE_M)
             for drone, g in zip(drone_ids, scenario.goals)
         }
+        if args.lateral is not None and args.scenario == "head_on":
+            base_goals[drone_ids[0]] = (4.0, args.lateral, CRUISE_ALTITUDE_M)
+            base_goals[drone_ids[1]] = (-4.0, -args.lateral, CRUISE_ALTITUDE_M)
         if args.starts is not None:
             reset_starts: dict[int, tuple[float, float, float]] = {}
             for entry in args.starts.split(";"):
@@ -920,6 +936,68 @@ def main() -> int:
                 drone: (-3.0 if idx == 0 else 3.0, 0.0, CRUISE_ALTITUDE_M)
                 for idx, drone in enumerate(drone_ids)
             }
+
+        if args.multi_seed > 0:
+            seed_results = []
+            for seed in range(1, args.multi_seed + 1):
+                lateral = random.Random(seed).uniform(-0.8, 0.8)
+                seed_goals = dict(base_goals)
+                if args.scenario == "head_on":
+                    seed_goals[drone_ids[0]] = (
+                        4.0,
+                        lateral,
+                        CRUISE_ALTITUDE_M,
+                    )
+                    seed_goals[drone_ids[1]] = (
+                        -4.0,
+                        -lateral,
+                        CRUISE_ALTITUDE_M,
+                    )
+                trajectory = args.trajectory
+                if trajectory is not None:
+                    trajectory = trajectory.with_name(
+                        f"{trajectory.stem}_seed{seed}{trajectory.suffix}"
+                    )
+                result = run_mqtt_loop(
+                    drone_ids=drone_ids,
+                    base_goals=seed_goals,
+                    mode=args.mode,
+                    llm_client=llm_client,
+                    llm_fallback=llm_fallback,
+                    host=args.host,
+                    port=args.port,
+                    max_steps=args.max_steps,
+                    trajectory=trajectory,
+                    reset_starts=reset_starts,
+                )
+                seed_results.append(
+                    {
+                        "seed": seed,
+                        "lateral": round(lateral, 4),
+                        "min_rho": result["min_rho"],
+                        "min_distance_m": result["min_distance_m"],
+                        "cbf_events": result["cbf_events"],
+                        "final_positions": result["final_positions"],
+                    }
+                )
+                print(
+                    json.dumps(seed_results[-1], ensure_ascii=False),
+                    flush=True,
+                )
+
+            rho_vals = [r["min_rho"] for r in seed_results if r["min_rho"] is not None]
+            print(
+                json.dumps(
+                    {
+                        "seeds": args.multi_seed,
+                        "min_rho_all": min(rho_vals) if rho_vals else None,
+                        "results": seed_results,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            return 0
 
         episodes = []
         for rep in range(args.repetitions):

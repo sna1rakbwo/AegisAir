@@ -85,10 +85,33 @@ rep  min_rho    min_distance_m  cbf_events
 `min_rho_all = 0.367311 > 0`，且 10/10 次两机都到达 goal。该 frozen gate 通过。
 轨迹：`/Volumes/Expansion/aegisair_phase5_20260816/headon10_rep*.jsonl`。
 
+## 多 seed 横向抖动 head-on（10 seed）
+
+`--multi-seed 10`，每 seed 用 `random.Random(seed).uniform(-0.8, 0.8)` 生成
+goal 横向偏移（drone2→(4, a)，drone3→(-4, -a)），spawn/reset 仍固定 ±3：
+
+```text
+seed lateral   min_rho   min_distance_m  cbf_events
+1    -0.5850   0.303710  2.2632          61
+2     0.7297   0.445893  2.4214          68
+3    -0.4193   0.536637  1.8458          88
+4    -0.4223   0.595349  1.8458          90
+5     0.1966   0.311847  1.4425          108
+6     0.4693   0.610254  1.8870          86
+7    -0.2819   0.409041  1.6331          98
+8    -0.4373   0.624450  1.8406          88
+9    -0.0592   0.125655  1.2055          138
+10    0.1142   0.216771  1.2983          122
+```
+
+`min_rho_all = 0.125655 > 0`，10/10 seed 通过。最接近正对头的 seed 9
+（lateral=-0.059）也保持 `rho>0`。轨迹：
+`/Volumes/Expansion/aegisair_phase5_20260816/headon_seeds_seed*.jsonl`。
+
 ## 剩余（还不能说正式冻结）
 
-- 10 次重复已过，但这是**固定几何**（无 per-seed 横向抖动）；论文级统计
-  还需要横向抖动的多 seed 版本。
+- 10 次重复与 10 seed 横向抖动都已过，但仍缺跨 scenario 的 crossing/
+  multi-UAV、以及控制率/制动参数的正式标定。
 - 尚未做 P2 控制率扫描（10/20/50 Hz）。
 - P3 已做第一次速度阶跃（`marllib/phase5_step_response.py`），实测
   `v0≈1.56 m/s`、`d_brake≈0.59 m`、`a_eff≈2.06 m/s²`、`tau_ctrl < 0.1 s`；
