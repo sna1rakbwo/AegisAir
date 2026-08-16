@@ -11,6 +11,7 @@ RUN apt-get update \
     && pip3 install --no-cache-dir paho-mqtt \
     && rm -rf /var/lib/apt/lists/*
 
+COPY px4_adapter /work/px4_adapter
 COPY px4_adapter/docker/run_adapter.sh /usr/local/bin/run_adapter.sh
 RUN chmod +x /usr/local/bin/run_adapter.sh
 
