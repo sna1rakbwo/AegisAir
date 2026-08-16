@@ -409,8 +409,18 @@ def _resolve_priority_order(
     except Exception:
         return fallback
     order = raw.get("priority_order") if raw else None
-    if isinstance(order, list) and set(order) == set(drone_ids):
-        return [int(v) for v in order]
+    if isinstance(order, list):
+        try:
+            order_int = [int(v) for v in order]
+        except (TypeError, ValueError):
+            order_int = None
+        if order_int is not None and set(order_int) == set(drone_ids):
+            print(f"[priority-order] source=llm order={order_int}", flush=True)
+            return order_int
+    print(
+        f"[priority-order] source=fallback order={fallback} raw={raw}",
+        flush=True,
+    )
     return fallback
 
 
