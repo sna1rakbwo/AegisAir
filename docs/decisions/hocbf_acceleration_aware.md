@@ -303,6 +303,27 @@ min_distance_m   = 0.375（仍 near collision）
 cause 不是控制率，而是**连续时间 HOCBF + sample-and-hold d_safe + velocity-mode
 跟踪**在真实 4 机 PX4 上不成立。按诊断进入第 3 项：discrete-time CBF。
 
+## 11. Sampled-Data Barrier + SEQUENTIAL_PASS
+
+实现 sampled-data acceleration barrier：离散预测
+`r_{k+1}=r_k+v_k dt+0.5 a_rel dt^2`，预测 `s_{k+1}`，约束
+`h_{k+1}>=(1-gamma) h_k`，并对二次项在 `a_nom` 处线性化，所有 pair 一起解 QP。
+
+轻量 4 机结果：
+
+```text
+scheme                              min_rho   completed  collision
+sampled-data gamma=0.1              0.251     False      False   # safe but deadlock
+sampled-data gamma=0.1 + SEQ_PASS   0.141~0.228  True   False   # safe AND complete
+```
+
+`SEQUENTIAL_PASS`：deadlock 时按顺序给通行权，right-of-way 机 GO、其余 HOLD，
+barrier 全程在线。imperfect MARL（noise=0.4，5 seed）下全部 `rho>0`、完成、
+0 碰撞。
+
+结论：安全约束制造 deadlock，而 **coordination structure（谁先走）** 才能
+解除它；LLM/rule 的价值是决定通行顺序，barrier 决定怎么走才安全。
+
 ## 8. 主张边界
 
 当前只证明 HOCBF 已实现且 2 机 sim 安全完成；4 机 sim 尚未解决 deadlock，

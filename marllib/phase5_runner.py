@@ -391,6 +391,7 @@ def run_sim_episode(
     max_steps: int,
     real_time: bool,
     nominal_noise: float = 0.0,
+    sequential_pass: bool = False,
 ) -> dict[str, Any]:
     env.reset(seed=seed)
     replanner = (
@@ -428,6 +429,13 @@ def run_sim_episode(
     control_effort_n = 0
     emitted_commands = 0
     rejected_commands = 0
+    seq_state = {
+        "active": False,
+        "order": sorted(env.agent_ids),
+        "idx": 0,
+        "best": {i: float("inf") for i in env.agent_ids},
+        "stall": {i: 0 for i in env.agent_ids},
+    }
 
     for step in range(max_steps):
         t = step * env.scenario.dt
@@ -451,6 +459,39 @@ def run_sim_episode(
             failed=failed,
             aborted=aborted,
         )
+        if sequential_pass:
+            for i in env.agent_ids:
+                dist = float(
+                    np.linalg.norm(env.positions[i] - np.asarray(base_goals[i][:2]))
+                )
+                if dist < seq_state["best"][i] - 0.02:
+                    seq_state["best"][i] = dist
+                    seq_state["stall"][i] = 0
+                else:
+                    seq_state["stall"][i] += 1
+            if not seq_state["active"] and any(
+                v >= 8 for v in seq_state["stall"].values()
+            ):
+                seq_state["active"] = True
+                seq_state["idx"] = 0
+                seq_state["best"] = {i: float("inf") for i in env.agent_ids}
+                seq_state["stall"] = {i: 0 for i in env.agent_ids}
+            if seq_state["active"]:
+                right_of_way = seq_state["order"][seq_state["idx"]]
+                for i in env.agent_ids:
+                    overrides.velocity_scale[i] = (
+                        1.0 if i == right_of_way else 0.0
+                    )
+                if (
+                    np.linalg.norm(
+                        env.positions[right_of_way]
+                        - np.asarray(base_goals[right_of_way][:2])
+                    )
+                    < env.scenario.goal_epsilon
+                ):
+                    seq_state["idx"] += 1
+                    if seq_state["idx"] >= len(seq_state["order"]):
+                        seq_state["active"] = False
         if nominal_noise > 0:
             rng = np.random.default_rng(seed * 1_000_000 + step)
             for i in env.agent_ids:
@@ -940,6 +981,7 @@ def main() -> int:
     parser.add_argument("--tau-ctrl", type=float, default=0.0)
     parser.add_argument("--sampled-data", action="store_true")
     parser.add_argument("--gamma", type=float, default=0.1)
+    parser.add_argument("--sequential-pass", action="store_true")
     parser.add_argument("--nominal-noise", type=float, default=0.0)
     parser.add_argument("--real-time", action="store_true")
     parser.add_argument("--mqtt", action="store_true")
@@ -1184,6 +1226,7 @@ def main() -> int:
             max_steps=args.max_steps,
             real_time=args.real_time,
             nominal_noise=args.nominal_noise,
+            sequential_pass=args.sequential_pass,
         )
         runs.append(run)
 
