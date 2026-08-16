@@ -93,23 +93,34 @@ v_{cmd}=v_{actual}+a_{safe}\Delta t,\qquad |v_{cmd}|\le v_{max}
 | 场景 | velocity-CBF | HOCBF (k1=k2=1, a_max=2, kv=2) |
 | --- | --- | --- |
 | 2 UAV head-on | 完成，0 碰撞，cbf_events 76 | 完成，0 碰撞，cbf_events 110 |
-| 4 UAV crossing | 完成，0 碰撞，cbf_events 282 | **未完成（deadlock），0 碰撞，cbf_events 800** |
+| 4 UAV crossing | 完成，0 碰撞，cbf_events 282 | 未完成，0 碰撞，cbf_events 644 |
 
 结论：
 
 - E1 2 机 HOCBF 安全且完成；
-- E2 4 机 HOCBF 安全（0 碰撞）但**卡死未到 goal**。这是集中式 QP 在对称 4 机
-  交叉下的典型 deadlock，不是测量错误。
+- E2 4 机 HOCBF 安全（0 碰撞）但**未到 goal**；`(k1,k2)` 越大越安全但越容易
+  卡死，越小越可能短时跌破 `rho=0`。
+
+`(k1,k2)` 对 4 机 `min_rho` 的实测（修复 Dykstra 收敛后）：
+
+```text
+k1,k2     min_rho       cbf_events  qp_infeasible
+0.5,0.5   -0.1109       790         0
+1,1       -0.0207       644         0
+2,2       2.4e-16       800         0
+```
+
+说明对称 4 机交叉处在 safety-completion 边界：要 `rho>=0` 就会接近 deadlock。
+这是集中式 QP 在该对称几何下的真实现象，不是求解器错误。
 
 ## 7. 下一步
 
-1. `(k1,k2)` 敏感性：`(0.5,0.5)/(1,1)/(1,2)/(2,2)`，找既不卡死又保 `rho>=0`
-   的组合。
-2. deadlock 处理：QP infeasible 或长时间无 progress 时进入 emergency
-   separation / 有限 `v_target`，并记录 infeasible rate，不偷偷加 slack。
-3. 轻量 sim 的 CBF vs HOCBF 对比表（min_rho / violation / collision /
+1. 增加 **deadlock/无 progress 检测**：连续多步目标距离不降时进入确定性
+   emergency separation（优先级或侧向分离），记录 deadlock rate，不偷偷加
+   barrier slack。
+2. 轻量 sim 的 CBF vs HOCBF 对比表（min_rho / violation / collision /
    intervention / control effort / mission time）。
-4. 通过后再接 PX4 velocity-mode。
+3. 通过后再接 PX4 velocity-mode。
 
 ## 8. 主张边界
 

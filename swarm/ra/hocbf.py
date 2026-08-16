@@ -71,7 +71,7 @@ def solve_acceleration_qp(
     k1: float,
     k2: float,
     a_max: float,
-    max_iters: int = 400,
+    max_iters: int = 3000,
     tol: float = 1e-7,
 ) -> tuple[dict[int, np.ndarray], bool, int]:
     """Solve one centralized QP for every drone's safe acceleration.
@@ -107,9 +107,7 @@ def solve_acceleration_qp(
     # every pairwise half-space converges to the closest point to a_nom.
     corrections = [np.zeros_like(x) for _ in range(len(halfspaces) + 1)]
     x0 = x.copy()
-    prev = np.full_like(x, np.inf)
-    iterations = 0
-    for iterations in range(1, max_iters + 1):
+    for _ in range(max_iters):
         cur = x0
         for idx in range(len(halfspaces) + 1):
             y = cur + corrections[idx]
@@ -121,9 +119,6 @@ def solve_acceleration_qp(
             corrections[idx] = y - proj
             cur = proj
         x0 = cur
-        if float(np.max(np.abs(x0 - prev))) < tol:
-            break
-        prev = x0.copy()
 
     feasible = True
     box_ok = np.all(np.abs(x0) <= a_max + 1e-6)
@@ -144,4 +139,4 @@ def solve_acceleration_qp(
                 -a_max,
                 a_max,
             )
-    return a_safe, feasible, iterations
+    return a_safe, feasible, max_iters
