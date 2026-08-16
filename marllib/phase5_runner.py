@@ -42,6 +42,7 @@ from swarm.ra.runtime_assurance import RuntimeAssurance
 from swarm.recovery import (
     AsyncMissionReplanner,
     MlxLmClient,
+    RecoveryContext,
     RecoveryOverrides,
     ReplanConfig,
     RuleMissionPlanner,
@@ -370,6 +371,49 @@ def _priority_order(
     return sorted(drone_ids)
 
 
+def _resolve_priority_order(
+    client,
+    drone_ids: list[int],
+    urgent_drone: int | None,
+    snapshots: dict[int, DroneSnapshot],
+    base_goals: dict[int, tuple[float, float, float]],
+    timestamp_ms: int,
+) -> list[int]:
+    """Return a right-of-way order from the LLM, with deterministic fallback."""
+    fallback = _priority_order(drone_ids, urgent_drone)
+    if client is None:
+        return fallback
+    priorities = {
+        d: ("urgent" if d == urgent_drone else "normal") for d in drone_ids
+    }
+    context = RecoveryContext(
+        event="MISSION_PLAN_INVALIDATED",
+        agent_i=drone_ids[0],
+        agent_j=drone_ids[0],
+        current_margin=0.0,
+        predicted_min_margin=None,
+        margin_degradation=None,
+        intervention_count=0,
+        cause="COORDINATION_DEGRADATION",
+        severity="MEDIUM",
+        snapshots=snapshots,
+        current_goals=base_goals,
+        base_goals=base_goals,
+        priorities=priorities,
+        timestamp_ms=timestamp_ms,
+        mission_change=None,
+    )
+    try:
+        result = client.generate(context)
+        raw = result.raw if isinstance(result.raw, dict) else None
+    except Exception:
+        return fallback
+    order = raw.get("priority_order") if raw else None
+    if isinstance(order, list) and set(order) == set(drone_ids):
+        return [int(v) for v in order]
+    return fallback
+
+
 def _make_replanner(
     *,
     client,
@@ -487,6 +531,14 @@ def run_sim_episode(
                 seq_state["idx"] = 0
                 seq_state["best"] = {i: float("inf") for i in env.agent_ids}
                 seq_state["stall"] = {i: 0 for i in env.agent_ids}
+                seq_state["order"] = _resolve_priority_order(
+                    llm_client,
+                    env.agent_ids,
+                    urgent_drone,
+                    _snapshots(env),
+                    base_goals,
+                    int(t * 1000),
+                )
             if seq_state["active"]:
                 right_of_way = seq_state["order"][seq_state["idx"]]
                 for i in env.agent_ids:
@@ -834,6 +886,14 @@ def run_mqtt_loop(
                     seq_state["idx"] = 0
                     seq_state["best"] = {i: float("inf") for i in drone_ids}
                     seq_state["stall"] = {i: 0 for i in drone_ids}
+                    seq_state["order"] = _resolve_priority_order(
+                        llm_client,
+                        drone_ids,
+                        urgent_drone,
+                        snapshots,
+                        base_goals,
+                        timestamp_ms,
+                    )
                 if seq_state["active"]:
                     right_of_way = seq_state["order"][seq_state["idx"]]
                     for i in drone_ids:
