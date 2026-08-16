@@ -892,6 +892,11 @@ def main() -> int:
         default=None,
         help="Semicolon-separated reset starts, e.g. 2=-3,0,2.5;3=3,0,2.5",
     )
+    parser.add_argument(
+        "--goals",
+        default=None,
+        help="Semicolon-separated live goals, e.g. 2=3,0,2.5;3=0,3,2.5",
+    )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=1883)
     args = parser.parse_args()
@@ -920,6 +925,14 @@ def main() -> int:
             drone: (float(g[0]), float(g[1]), CRUISE_ALTITUDE_M)
             for drone, g in zip(drone_ids, scenario.goals)
         }
+        if args.goals is not None:
+            base_goals = {}
+            for entry in args.goals.split(";"):
+                if not entry:
+                    continue
+                id_part, vec = entry.split("=", 1)
+                x, y, z = (float(v) for v in vec.split(","))
+                base_goals[int(id_part)] = (x, y, z)
         if args.lateral is not None and args.scenario == "head_on":
             base_goals[drone_ids[0]] = (4.0, args.lateral, CRUISE_ALTITUDE_M)
             base_goals[drone_ids[1]] = (-4.0, -args.lateral, CRUISE_ALTITUDE_M)

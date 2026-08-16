@@ -108,10 +108,32 @@ seed lateral   min_rho   min_distance_m  cbf_events
 （lateral=-0.059）也保持 `rho>0`。轨迹：
 `/Volumes/Expansion/aegisair_phase5_20260816/headon_seeds_seed*.jsonl`。
 
+## 垂直交叉 crossing（10 次重复）
+
+`--starts '2=-3,0,2.5;3=0,-3,2.5'`、`--goals '2=3,0,2.5;3=0,3,2.5'`，
+ASYNC + rule，10 次重复：
+
+```text
+rep min_rho   min_distance_m  cbf_events
+1   0.531066  3.1218          42
+2   0.525001  3.0289          42
+3   0.486357  3.0612          43
+4   0.548477  3.0520          44
+5   0.546623  3.0776          43
+6   0.540687  3.0185          42
+7   0.520154  3.0545          42
+8   0.527330  3.0918          42
+9   0.519849  3.0396          42
+10  0.536043  3.0422          43
+```
+
+`min_rho_all = 0.486357 > 0`，10/10 通过，两机都到达各自 goal。轨迹：
+`/Volumes/Expansion/aegisair_phase5_20260816/crossing10_rep*.jsonl`。
+
 ## 剩余（还不能说正式冻结）
 
-- 10 次重复与 10 seed 横向抖动都已过，但仍缺跨 scenario 的 crossing/
-  multi-UAV、以及控制率/制动参数的正式标定。
+- head-on（固定 + 10 seed 横向抖动）与 crossing 都已过，但仍缺 multi-UAV、
+  P2 控制率扫描、以及 P3 多速度制动标定。
 - 尚未做 P2 控制率扫描（10/20/50 Hz）。
 - P3 已做第一次速度阶跃（`marllib/phase5_step_response.py`），实测
   `v0≈1.56 m/s`、`d_brake≈0.59 m`、`a_eff≈2.06 m/s²`、`tau_ctrl < 0.1 s`；
