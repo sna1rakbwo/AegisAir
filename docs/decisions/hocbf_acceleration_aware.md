@@ -231,12 +231,30 @@ cbf_events = 24
 即 HOCBF 在真实 PX4/Gazebo 闭环中保持 `rho>0`。这是第一次 HOCBF 的 live 安全
 通过；4 机 PX4 版本与 `epsilon_impl` 放大观察留作后续。
 
+## 6.7 4 机 PX4 HOCBF —— No-Go
+
+4 机 2v2 交叉在 PX4/Gazebo（velocity-mode + HOCBF k=3、20Hz、ASYNC rule）：
+
+```text
+min_rho = -0.8072
+min_distance_m = 0.3073
+cbf_events = 375
+triggers = 4, plans_committed = 4, mission_changes = 4
+```
+
+`min_rho` 从 sim 的 `-0.003` 放大到 `-0.807`，且最小中心距 0.31 m 接近碰撞
+（drone 4/5 在中心附近几乎相撞，drone 4 最终落到地面 z=-0.25）。这已经不能
+用 `epsilon_impl≈3e-3` 的离散化 tolerance 解释。
+
+按之前约定：PX4 4 机出现 near collision 时，应重新考虑 discrete-time CBF。
+
 ## 7. 下一步
 
 1. 把 N 提到 10，补 control effort（`mean |a_safe|`）与 4 机真实 Qwen 对比。
 2. imperfect MARL 下的 HOCBF 保护。
-3. 接 PX4/Gazebo velocity-mode，观察 `epsilon_impl` 是否被放大；若放大到
-   `-0.05~-0.1` 或出现 near collision，再重新考虑 discrete-time CBF。
+3. 4 机 PX4 已出现 near collision，进入 **discrete-time CBF / higher-fidelity
+   live controller** 阶段：先诊断是 QP 截止频率不足、velocity-mode 跟踪、还是
+   deadlock recovery 时机问题，再决定升级方向。
 
 ## 8. 主张边界
 
