@@ -256,6 +256,38 @@ triggers = 4, plans_committed = 4, mission_changes = 4
    live controller** 阶段：先诊断是 QP 截止频率不足、velocity-mode 跟踪、还是
    deadlock recovery 时机问题，再决定升级方向。
 
+## 8. 诊断（4 机 PX4 near-collision）
+
+从 4 机 PX4 轨迹测到的关键量：
+
+```text
+HOCBF QP solve time      mean 20 ms（20Hz deadline 50ms 内）
+telemetry AoI            mean 0.029 s, max 0.07 s
+实际控制 loop dt         mean 0.128 s => 7.8 Hz（请求 20Hz）
+velocity tracking error  mean 0.285 m/s, p90 0.364 m/s
+first rho<0              t=1.43 s
+worst rho                -0.807 @ t=5.2 s, min distance 0.31 m
+```
+
+结论：
+
+1. QP 求解不是瓶颈。
+2. AoI 也不大。
+3. **实际控制率只有 7.8Hz**（每步 MQTT 发布/遥测 + 50ms sleep 叠加），把
+   discrete-time HOCBF 的积分步长从 0.05s 拉成 ~0.128s。
+4. **PX4 velocity tracking 有 ~0.29 m/s 滞后**，而 HOCBF 假设
+   `v_dot = a_safe` 的理想双积分器，实际 `v_actual` 跟不上 `v_cmd`。
+
+因此 near-collision 是“控制率不足 + 速度跟踪滞后未建模”共同导致，不是单纯
+采样容差。
+
+## 9. 修复优先级
+
+1. 先修控制率：把 live loop 改成固定定时器/减少每步 MQTT 开销，实测回 20Hz。
+2. 把实测 velocity-tracking lag 以 `tau_ctrl≈0.2s` 形式并入 `M_dyn`，或加
+   velocity-tracking compensator。
+3. 若仍失败，上 discrete-time CBF，用 PX4 速度跟踪模型离散化 barrier。
+
 ## 8. 主张边界
 
 当前只证明 HOCBF 已实现且 2 机 sim 安全完成；4 机 sim 尚未解决 deadlock，
