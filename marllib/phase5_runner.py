@@ -609,6 +609,8 @@ def run_mqtt_loop(
     a_max: float = 2.0,
     kv: float = 2.0,
     tau_ctrl: float = 0.0,
+    sampled_data: bool = False,
+    gamma: float = 0.1,
 ) -> dict[str, Any]:
     """Live PX4 loop: arm/takeoff, then RA-filtered closed-loop control.
 
@@ -629,6 +631,8 @@ def run_mqtt_loop(
         hocbf_k2=hocbf_k2,
         a_max=a_max,
         kv=kv,
+        sampled_data=sampled_data,
+        gamma=gamma,
     )
     replanner = (
         _make_replanner(
@@ -934,6 +938,8 @@ def main() -> int:
     parser.add_argument("--a-max", type=float, default=2.0)
     parser.add_argument("--kv", type=float, default=2.0)
     parser.add_argument("--tau-ctrl", type=float, default=0.0)
+    parser.add_argument("--sampled-data", action="store_true")
+    parser.add_argument("--gamma", type=float, default=0.1)
     parser.add_argument("--nominal-noise", type=float, default=0.0)
     parser.add_argument("--real-time", action="store_true")
     parser.add_argument("--mqtt", action="store_true")
@@ -1065,6 +1071,8 @@ def main() -> int:
                     a_max=args.a_max,
                     kv=args.kv,
                     tau_ctrl=args.tau_ctrl,
+                    sampled_data=args.sampled_data,
+                    gamma=args.gamma,
                 )
                 seed_results.append(
                     {
@@ -1120,6 +1128,8 @@ def main() -> int:
                 a_max=args.a_max,
                 kv=args.kv,
                 tau_ctrl=args.tau_ctrl,
+                sampled_data=args.sampled_data,
+                gamma=args.gamma,
             )
             episodes.append(result)
             print(
@@ -1157,6 +1167,8 @@ def main() -> int:
         hocbf_k2=args.hocbf_k2,
         a_max=args.a_max,
         kv=args.kv,
+        sampled_data=args.sampled_data,
+        gamma=args.gamma,
     )
     env = MultiUAVEnv(spec["scenario"])
     runs = []

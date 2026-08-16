@@ -141,3 +141,92 @@ def solve_acceleration_qp(
                 a_max,
             )
     return a_safe, feasible, max_iters
+
+
+def solve_sampled_data_qp(
+    *,
+    a_nom: dict[int, np.ndarray],
+    positions: dict[int, np.ndarray],
+    velocities: dict[int, np.ndarray],
+    s_now: dict[tuple[int, int], float],
+    s_next: dict[tuple[int, int], float],
+    dt: float,
+    gamma: float,
+    a_max: float,
+    max_iters: int = 3000,
+) -> tuple[dict[int, np.ndarray], bool, int]:
+    """Centralized sampled-data acceleration QP.
+
+    For each pair, the barrier is evaluated at the next sample:
+
+        r_next = r + v*dt + 0.5*a_rel*dt^2
+        h_next = ||r_next||^2 - s_next^2 >= (1 - gamma) * h_now
+
+    The quadratic term in ``a`` is linearized around ``a_nom``, keeping the
+    problem a convex QP over all agents simultaneously.
+    """
+    drone_ids = sorted(positions)
+    n_agents = len(drone_ids)
+    index = {drone: idx for idx, drone in enumerate(drone_ids)}
+
+    x = np.zeros(2 * n_agents, dtype=np.float64)
+    for idx, drone in enumerate(drone_ids):
+        x[2 * idx : 2 * idx + 2] = np.asarray(a_nom[drone], dtype=np.float64)
+    x_nom = x.copy()
+
+    halfspaces: list[tuple[np.ndarray, float]] = []
+    for (i, j), sk in s_now.items():
+        ii = index[i]
+        jj = index[j]
+        r = np.asarray(positions[i], dtype=np.float64) - np.asarray(
+            positions[j], dtype=np.float64
+        )
+        v = np.asarray(velocities[i], dtype=np.float64) - np.asarray(
+            velocities[j], dtype=np.float64
+        )
+        a_rel_nom = np.asarray(a_nom[i], dtype=np.float64) - np.asarray(
+            a_nom[j], dtype=np.float64
+        )
+        r_pred = r + v * dt + 0.5 * a_rel_nom * dt * dt
+        h_now = float(np.dot(r, r)) - sk * sk
+        h_next_nom = float(np.dot(r_pred, r_pred)) - s_next[(i, j)] ** 2
+
+        grad = r_pred * (dt * dt)
+        c = np.zeros(2 * n_agents, dtype=np.float64)
+        c[2 * ii : 2 * ii + 2] = grad
+        c[2 * jj : 2 * jj + 2] = -grad
+        b = (1.0 - gamma) * h_now - h_next_nom + float(np.dot(c, x_nom))
+        halfspaces.append((c, b))
+
+    corrections = [np.zeros_like(x) for _ in range(len(halfspaces) + 1)]
+    x0 = x.copy()
+    for _ in range(max_iters):
+        cur = x0
+        for idx in range(len(halfspaces) + 1):
+            y = cur + corrections[idx]
+            if idx == 0:
+                proj = _project_box(y, a_max)
+            else:
+                c, b = halfspaces[idx - 1]
+                proj = _project_halfspace(y, c, b)
+            corrections[idx] = y - proj
+            cur = proj
+        x0 = cur
+
+    feasible = np.all(np.abs(x0) <= a_max + 1e-6)
+    for c, b in halfspaces:
+        if float(np.dot(c, x0)) < b - 1e-6:
+            feasible = False
+            break
+
+    a_safe: dict[int, np.ndarray] = {}
+    for idx, drone in enumerate(drone_ids):
+        if feasible:
+            a_safe[drone] = x0[2 * idx : 2 * idx + 2].copy()
+        else:
+            a_safe[drone] = np.clip(
+                -np.asarray(velocities[drone][:2], dtype=np.float64),
+                -a_max,
+                a_max,
+            )
+    return a_safe, feasible, max_iters

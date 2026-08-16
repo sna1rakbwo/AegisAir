@@ -7,12 +7,15 @@ from dataclasses import dataclass
 import numpy as np
 
 from swarm.ra.cbf import cbf_constraint, project_safe_action
-from swarm.ra.hocbf import solve_acceleration_qp
+from swarm.ra.hocbf import solve_acceleration_qp, solve_sampled_data_qp
 from swarm.ra.margin import PairMarginTracker, normalized_margin
 from swarm.ra.margins import (
     RuntimeAssuranceParams,
     closing_speed,
+    communication_margin,
     dynamic_safety_boundary,
+    dynamics_margin,
+    perception_margin,
 )
 from swarm.ra.predictor import PredictiveMonitor
 
@@ -50,6 +53,8 @@ class RuntimeAssurance:
         hocbf_k2: float = 1.0,
         a_max: float = 2.0,
         kv: float = 2.0,
+        sampled_data: bool = False,
+        gamma: float = 0.1,
     ) -> None:
         self.params = params or RuntimeAssuranceParams()
         self.v_max = v_max
@@ -60,6 +65,8 @@ class RuntimeAssurance:
         self.k2 = hocbf_k2
         self.a_max = a_max
         self.kv = kv
+        self.sampled_data = sampled_data
+        self.gamma = gamma
         self.trackers: dict[tuple[int, int], PairMarginTracker] = {}
         self.monitor = PredictiveMonitor(q_pred=self.params.q_pred)
         self._last_t: float | None = None
@@ -80,6 +87,8 @@ class RuntimeAssurance:
         t: float,
         aoi: dict[tuple[int, int], float] | None = None,
     ) -> dict[int, FilterResult]:
+        if self.sampled_data:
+            return self._filter_sampled_data(snapshots, nominal_actions, t, aoi)
         if self.use_hocbf:
             return self._filter_hocbf(snapshots, nominal_actions, t, aoi)
         aoi = aoi or {}
@@ -189,6 +198,197 @@ class RuntimeAssurance:
                 proactive=worst_pred_rho < self.params.rho_pred_threshold,
             )
         return results
+
+    def _filter_sampled_data(
+        self,
+        snapshots: dict[int, object],
+        nominal_actions: dict[int, np.ndarray],
+        t: float,
+        aoi: dict[tuple[int, int], float] | None,
+    ) -> dict[int, FilterResult]:
+        """Sampled-data acceleration-aware filter."""
+        aoi = aoi or {}
+        dt = self.params.degradation_dt
+        if self._last_t is not None:
+            dt = max(1e-3, t - self._last_t)
+        self._last_t = t
+        for agent_id, snapshot in snapshots.items():
+            if snapshot.velocity is not None:
+                self.monitor.update_acceleration(agent_id, snapshot.velocity, dt)
+
+        drone_ids = sorted(snapshots)
+        positions = {
+            i: np.asarray(snapshots[i].position[:2], dtype=np.float64)
+            for i in drone_ids
+        }
+        velocities = {
+            i: (
+                np.asarray(snapshots[i].velocity[:2], dtype=np.float64)
+                if snapshots[i].velocity is not None
+                else np.zeros(2)
+            )
+            for i in drone_ids
+        }
+
+        a_nom: dict[int, np.ndarray] = {}
+        for i in drone_ids:
+            v_nom = np.asarray(nominal_actions[i][:2], dtype=np.float64)
+            a_nom[i] = np.clip(
+                self.kv * (v_nom - velocities[i]),
+                -self.a_max,
+                self.a_max,
+            )
+
+        s_now: dict[tuple[int, int], float] = {}
+        s_next: dict[tuple[int, int], float] = {}
+        pair_rho: dict[tuple[int, int], float] = {}
+        pair_deg: dict[tuple[int, int], float] = {}
+        pair_pred: dict[tuple[int, int], object] = {}
+
+        for a in range(len(drone_ids)):
+            for b in range(a + 1, len(drone_ids)):
+                i = drone_ids[a]
+                j = drone_ids[b]
+                snap_i = snapshots[i]
+                snap_j = snapshots[j]
+                pair_aoi = aoi.get((i, j), aoi.get((j, i), 0.0))
+                v_cl_now = _closing_speed_2d(
+                    positions[i], positions[j], velocities[i], velocities[j]
+                )
+                s_now[(i, j)] = _d_safe_2d(
+                    v_cl_now, pair_aoi, self.perception_sigma, self.params
+                )
+
+                v_pred_i = velocities[i] + a_nom[i] * dt
+                v_pred_j = velocities[j] + a_nom[j] * dt
+                v_cl_next = _closing_speed_2d(
+                    positions[i], positions[j], v_pred_i, v_pred_j
+                )
+                s_next[(i, j)] = _d_safe_2d(
+                    v_cl_next, pair_aoi, self.perception_sigma, self.params
+                )
+
+                distance = float(np.linalg.norm(positions[i] - positions[j]))
+                rho = normalized_margin(distance, s_now[(i, j)])
+                tracker = self._tracker(i, j)
+                degradation = tracker.update(rho, t)
+                pred = self.monitor.predict(
+                    agent_i=i,
+                    agent_j=j,
+                    p_i=snap_i.position,
+                    p_j=snap_j.position,
+                    v_i=snap_i.velocity or (0.0, 0.0, 0.0),
+                    v_j=snap_j.velocity or (0.0, 0.0, 0.0),
+                    sigma_i=self.perception_sigma,
+                    sigma_j=self.perception_sigma,
+                    aoi=pair_aoi,
+                    params=self.params,
+                    horizon=self.params.prediction_horizon,
+                )
+                pair_rho[(i, j)] = rho
+                pair_deg[(i, j)] = degradation
+                pair_pred[(i, j)] = pred
+
+        a_safe, feasible, _ = solve_sampled_data_qp(
+            a_nom=a_nom,
+            positions=positions,
+            velocities=velocities,
+            s_now=s_now,
+            s_next=s_next,
+            dt=dt,
+            gamma=self.gamma,
+            a_max=self.a_max,
+        )
+        self.qp_solve_count += 1
+        if not feasible:
+            self.qp_infeasible_count += 1
+        self.last_qp_feasible = feasible
+
+        results: dict[int, FilterResult] = {}
+        for i in drone_ids:
+            worst_rho = float("inf")
+            worst_g = 0.0
+            worst_pair: int | None = None
+            worst_pred_rho = float("inf")
+            worst_tau = 0.0
+            worst_ttsb: float | None = None
+            worst_conf = 1.0
+            for (ii, jj), rho in pair_rho.items():
+                if i != ii and i != jj:
+                    continue
+                other = jj if ii == i else ii
+                if rho < worst_rho:
+                    worst_rho = rho
+                    worst_g = pair_deg[(ii, jj)]
+                    worst_pair = other
+                pred = pair_pred[(ii, jj)]
+                if pred.rho_min_pred < worst_pred_rho:
+                    worst_pred_rho = pred.rho_min_pred
+                    worst_tau = pred.tau_star
+                    worst_ttsb = pred.ttsb
+                    worst_conf = pred.reliability_score
+
+            v_nom = np.asarray(nominal_actions[i][:2], dtype=np.float64)
+            v_safe = np.clip(velocities[i] + a_safe[i] * dt, -self.v_max, self.v_max)
+            intervened = bool(np.linalg.norm(a_safe[i] - a_nom[i]) > 1e-6)
+            mode = (
+                "override"
+                if intervened
+                else ("warning" if worst_rho < self.rho_warn else "normal")
+            )
+            results[i] = FilterResult(
+                drone=i,
+                mode=mode,
+                nominal_action=(float(v_nom[0]), float(v_nom[1])),
+                safe_action=(float(v_safe[0]), float(v_safe[1])),
+                safety_margin=float(worst_rho),
+                predicted_margin=float(worst_pred_rho),
+                time_to_min_margin=float(worst_tau),
+                time_to_safety_boundary=worst_ttsb,
+                prediction_reliability_score=float(worst_conf),
+                recovery_buffer=(
+                    worst_ttsb - self.params.estimated_recovery_latency
+                    if worst_ttsb is not None
+                    else None
+                ),
+                semantic_recovery_feasible=(
+                    worst_ttsb is not None
+                    and worst_ttsb > self.params.estimated_recovery_latency
+                ),
+                degradation=float(worst_g),
+                worst_pair=worst_pair,
+                intervened=intervened,
+                proactive=worst_pred_rho < self.params.rho_pred_threshold,
+            )
+        return results
+
+
+def _closing_speed_2d(
+    p_i: np.ndarray,
+    p_j: np.ndarray,
+    v_i: np.ndarray,
+    v_j: np.ndarray,
+) -> float:
+    delta = np.asarray(p_i, dtype=np.float64) - np.asarray(p_j, dtype=np.float64)
+    distance = float(np.linalg.norm(delta))
+    if distance == 0:
+        return 0.0
+    rel_v = np.asarray(v_i, dtype=np.float64) - np.asarray(v_j, dtype=np.float64)
+    return max(0.0, -float(np.dot(delta, rel_v)) / distance)
+
+
+def _d_safe_2d(
+    closing_speed: float,
+    aoi: float,
+    perception_sigma: float,
+    params: RuntimeAssuranceParams,
+) -> float:
+    return (
+        params.d0
+        + dynamics_margin(closing_speed, params)
+        + perception_margin(perception_sigma, perception_sigma, params)
+        + communication_margin(aoi, params)
+    )
 
     def _filter_hocbf(
         self,
