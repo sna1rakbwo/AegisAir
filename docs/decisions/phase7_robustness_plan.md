@@ -159,9 +159,26 @@ claim 收紧为 feasible/well-modeled envelope。
 
 ### 6.4 待办
 
-- live 复测：4 机 MAPPO + `--tau-px4 0.2` + SEQUENTIAL_PASS + 真实 telemetry
-  age，看 `min_rho` 是否回到 `>= 0` 或只剩很小 implementation deviation；
+- ~~live 复测~~（已做，见下）。
 - 若仍 infeasible，则按计划把 claim 收紧为 feasible/well-modeled envelope。
+
+### 6.5 live 复测结果（2026-08-17）
+
+4 机 MAPPO + `--tau-px4 0.2` + safe holding + AoI propagation：
+
+| 配置 | min_rho | min_distance | cbf_events |
+| --- | --- | --- | --- |
+| 修复前（ideal + seq-pass 原地停） | -0.508 | 0.498 m | 326 |
+| 修复后 | **+0.564** | **1.523 m** | 0 |
+
+结论：`min_rho` 从 `-0.51` 回到 `+0.56`，最小距离从 `0.50m` 拉回 `1.52m`，
+且 `cbf_events=0`（safe holding-point 在 mission 层就把冲突消解了，CBF 无需
+介入）。三个结构修复（safe holding / PX4 lag-aware / AoI propagation）成立。
+
+注意：`cbf_events=0` 说明这次是协调层解决了危险配置，而不是靠 barrier 强行
+刹车；这正好证明“mission-level YIELD/HOLD 语义”比“CBF 硬拦”更前置地消除
+风险。修复前那个 `rho=-0.51` 的 episode 轨迹保留在
+`mappo_diag.jsonl`，可用于论文 ablation。
 
 ## 4. 对齐 Phase 7：policy-quality robustness experiment
 
