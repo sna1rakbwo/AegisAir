@@ -77,6 +77,32 @@ class DecisionExpansionTest(unittest.TestCase):
         self.assertIn("YIELD", by_action)
         self.assertEqual(by_action["CHANGE_PRIORITY"].priority, "safety")
 
+    def test_coordination_degradation_expands_to_yield_and_reroute(self) -> None:
+        base = _context({"kind": "priority_change", "high": 0, "low": 1})
+        context = RecoveryContext(
+            event=base.event,
+            agent_i=0,
+            agent_j=0,
+            current_margin=base.current_margin,
+            predicted_min_margin=base.predicted_min_margin,
+            margin_degradation=base.margin_degradation,
+            intervention_count=base.intervention_count,
+            cause="COORDINATION_DEGRADATION",
+            severity=base.severity,
+            snapshots=base.snapshots,
+            current_goals=base.current_goals,
+            base_goals=base.base_goals,
+            priorities=base.priorities,
+            timestamp_ms=base.timestamp_ms,
+            mission_change=None,
+        )
+        plan = expand_decision(
+            MissionDecision(action="REROUTE", agent=0), context
+        )
+        actions = {c.action for c in plan.commands}
+        self.assertIn("YIELD", actions)
+        self.assertIn("REROUTE", actions)
+
     def test_semantic_errors_reject_unknown_agent(self) -> None:
         decision = MissionDecision(action="YIELD", agent=99)
         errors = semantic_errors(

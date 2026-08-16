@@ -82,6 +82,16 @@ def expand_decision(
         ]
         intent = f"prioritize drone {high} over drone {low}"
 
+    elif context.cause == "COORDINATION_DEGRADATION":
+        drone = decision.agent if decision.agent is not None else context.agent_i
+        commands = [_cmd(drone, "YIELD", None, ts, "yield", ttl_sec=2.0)]
+        if decision.action == "REROUTE":
+            waypoint = _deadlock_lateral_waypoint(context, drone, arena)
+            commands.append(
+                _cmd(drone, "REROUTE", waypoint, ts, "reroute", ttl_sec=4.0)
+            )
+        intent = f"break symmetric deadlock for drone {drone}"
+
     else:
         if decision.agent is None:
             raise ValueError(f"agent required for action {decision.action}")
@@ -132,6 +142,31 @@ def _nearest_healthy(context: RecoveryContext, failed: int) -> int:
     return min(
         (d for d in context.snapshots if d != failed),
         key=lambda d: _distance_2d(context.snapshots[d].position, target),
+    )
+
+
+def _deadlock_lateral_waypoint(
+    context: RecoveryContext,
+    drone: int,
+    arena: tuple[float, float, float, float],
+) -> tuple[float, float, float]:
+    """Deterministic lateral detour for a symmetric coordination deadlock."""
+    snap = context.snapshots[drone]
+    goal = context.base_goals[drone]
+    dx = goal[0] - snap.position[0]
+    dy = goal[1] - snap.position[1]
+    length = math.hypot(dx, dy)
+    if length < 1e-6:
+        perp_x, perp_y = 0.0, 1.0
+    else:
+        ux, uy = dx / length, dy / length
+        perp_x, perp_y = -uy, ux
+    sign = 1.0 if drone % 2 == 0 else -1.0
+    x0, x1, y0, y1 = arena
+    return (
+        float(min(max(snap.position[0] + perp_x * sign * 2.0, x0), x1)),
+        float(min(max(snap.position[1] + perp_y * sign * 2.0, y0), y1)),
+        0.0,
     )
 
 
