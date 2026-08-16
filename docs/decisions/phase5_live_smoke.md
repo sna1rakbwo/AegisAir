@@ -67,16 +67,18 @@ final_x:       drone2=3.989, drone3=-3.952
 
 - 这是 1 seed 冒烟，不是 10-seed 统计闸门。
 - 尚未做 P2 控制率扫描（10/20/50 Hz）。
-- 尚未做 P3 PX4 step-response 标定（`tau_ctrl`、`a_eff`、`d_brake`），当前
-  `M_dyn` 仍沿用轻量 sim 的理想参数。
+- P3 已做第一次速度阶跃（`marllib/phase5_step_response.py`），实测
+  `v0≈1.56 m/s`、`d_brake≈0.59 m`、`a_eff≈2.06 m/s²`、`tau_ctrl < 0.1 s`；
+  与默认 `M_dyn` 的 `a_eff=2.0 m/s²` 基本一致，`tau_r=0.3 s` 反而更保守。
+  但仍需多种速度多次重复取分位数后回填。
 
 ## 下一步
 
-1. 同一 head-on 场景跑 10 seed，出 `min_rho` 分布与 `min_t rho(t) >= 0` 统计。
+1. 同一 frozen head-on 场景重复 10 次，出 `min_rho` 分布与
+   `min_t rho(t) >= 0` 统计（每次从 spawn 重新起飞，或加 reset-to-start）。
 2. P2：把 adapter/runner 控制率提到 20/50 Hz 复测。
-3. P3：单机 2.5 m 定高，速度阶跃 `v_x -> 0`，测 `tau_ctrl` / `a_eff` /
-   `d_brake`，再回填 `M_dyn`。
-4. 若 10 seed 仍失败，再升级 HOCBF，不无限加大 `d0`。
+3. P3 补速度 0.5/1.0/1.5 m/s 各多次，取 `a_eff=P10(|a_decel|)` 回填 `M_dyn`。
+4. 若 10 次仍失败，再升级 HOCBF，不无限加大 `d0`。
 
 ## 主张边界
 
