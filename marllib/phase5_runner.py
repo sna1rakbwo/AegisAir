@@ -608,6 +608,7 @@ def run_mqtt_loop(
     hocbf_k2: float = 3.0,
     a_max: float = 2.0,
     kv: float = 2.0,
+    tau_ctrl: float = 0.0,
 ) -> dict[str, Any]:
     """Live PX4 loop: arm/takeoff, then RA-filtered closed-loop control.
 
@@ -621,6 +622,7 @@ def run_mqtt_loop(
         raise SystemExit("paho-mqtt is required for --mqtt mode") from exc
 
     ra = RuntimeAssurance(
+        params=RuntimeAssuranceParams(tau_ctrl=tau_ctrl),
         v_max=1.5,
         use_hocbf=use_hocbf,
         hocbf_k1=hocbf_k1,
@@ -732,14 +734,15 @@ def run_mqtt_loop(
                     publish(i, "move_to", target=reset_starts[i], native=False)
                 time.sleep(0.3)
 
-        start = time.monotonic()
+        period = 1.0 / rate_hz
         step = 0
         cbf_events = 0
         min_dist: float | None = None
         min_rho: float | None = None
         traj_rows: list[dict[str, Any]] = []
+        next_deadline = time.monotonic()
         while step < max_steps:
-            t = time.monotonic() - start
+            t = step * period
             timestamp_ms = int(time.time_ns() // 1_000_000)
             snapshots = {i: telemetry[i] for i in drone_ids if i in telemetry}
             if len(snapshots) != len(drone_ids):
@@ -857,7 +860,12 @@ def run_mqtt_loop(
                     }
                 )
             step += 1
-            time.sleep(0.1)
+            next_deadline += period
+            delay = next_deadline - time.monotonic()
+            if delay > 0:
+                time.sleep(delay)
+            else:
+                next_deadline = time.monotonic() + period
 
         final_positions = {
             i: list(snapshots[i].position) for i in drone_ids if i in snapshots
@@ -925,6 +933,7 @@ def main() -> int:
     parser.add_argument("--hocbf-k2", type=float, default=1.0)
     parser.add_argument("--a-max", type=float, default=2.0)
     parser.add_argument("--kv", type=float, default=2.0)
+    parser.add_argument("--tau-ctrl", type=float, default=0.0)
     parser.add_argument("--nominal-noise", type=float, default=0.0)
     parser.add_argument("--real-time", action="store_true")
     parser.add_argument("--mqtt", action="store_true")
@@ -1055,6 +1064,7 @@ def main() -> int:
                     hocbf_k2=args.hocbf_k2,
                     a_max=args.a_max,
                     kv=args.kv,
+                    tau_ctrl=args.tau_ctrl,
                 )
                 seed_results.append(
                     {
@@ -1109,6 +1119,7 @@ def main() -> int:
                 hocbf_k2=args.hocbf_k2,
                 a_max=args.a_max,
                 kv=args.kv,
+                tau_ctrl=args.tau_ctrl,
             )
             episodes.append(result)
             print(
@@ -1139,6 +1150,7 @@ def main() -> int:
         return 0
 
     ra = RuntimeAssurance(
+        params=RuntimeAssuranceParams(tau_ctrl=args.tau_ctrl),
         v_max=1.5,
         use_hocbf=args.hocbf,
         hocbf_k1=args.hocbf_k1,

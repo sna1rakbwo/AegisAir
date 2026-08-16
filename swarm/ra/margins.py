@@ -18,6 +18,7 @@ class RuntimeAssuranceParams:
 
     d0: float = 0.5
     tau_r: float = 0.3
+    tau_ctrl: float = 0.0
     a_eff: float = 2.0
     beta: float = 3.0
     v_max: float = 2.0
@@ -58,7 +59,8 @@ def closing_speed(p_i: Vector3, p_j: Vector3, v_i: Vector3, v_j: Vector3) -> flo
 
 def dynamics_margin(closing_speed: float, params: RuntimeAssuranceParams) -> float:
     """M_dyn = v_cl * tau_r + v_cl^2 / (2 a_eff)."""
-    return closing_speed * params.tau_r + (closing_speed**2) / (2.0 * params.a_eff)
+    tau = params.tau_r + params.tau_ctrl
+    return closing_speed * tau + (closing_speed**2) / (2.0 * params.a_eff)
 
 
 def perception_margin(
