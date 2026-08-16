@@ -37,6 +37,13 @@ class FilterResult:
     worst_pair: int | None
     intervened: bool
     proactive: bool
+    # Diagnostics (populated by the sampled-data path; optional elsewhere).
+    a_nom: tuple[float, float] | None = None
+    a_safe: tuple[float, float] | None = None
+    d_safe: float | None = None
+    accel_saturated: bool = False
+    vel_saturated: bool = False
+    feasible: bool | None = None
 
 
 class RuntimeAssurance:
@@ -344,6 +351,13 @@ class RuntimeAssurance:
 
             v_nom = np.asarray(nominal_actions[i][:2], dtype=np.float64)
             v_safe = np.clip(velocities[i] + a_safe[i] * dt, -self.v_max, self.v_max)
+            a_nom_i = np.asarray(a_nom[i], dtype=np.float64)
+            a_safe_i = np.asarray(a_safe[i], dtype=np.float64)
+            accel_saturated = bool(np.linalg.norm(a_safe_i) >= self.a_max - 1e-6)
+            vel_saturated = bool(np.linalg.norm(v_safe) >= self.v_max - 1e-6)
+            d_safe_i = min(
+                s_now[(ii, jj)] for (ii, jj) in s_now if i == ii or i == jj
+            )
             intervened = bool(np.linalg.norm(a_safe[i] - a_nom[i]) > 1e-6)
             mode = (
                 "override"
@@ -373,6 +387,12 @@ class RuntimeAssurance:
                 worst_pair=worst_pair,
                 intervened=intervened,
                 proactive=worst_pred_rho < self.params.rho_pred_threshold,
+                a_nom=(float(a_nom_i[0]), float(a_nom_i[1])),
+                a_safe=(float(a_safe_i[0]), float(a_safe_i[1])),
+                d_safe=float(d_safe_i),
+                accel_saturated=accel_saturated,
+                vel_saturated=vel_saturated,
+                feasible=bool(feasible),
             )
         return results
 

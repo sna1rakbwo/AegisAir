@@ -1188,6 +1188,12 @@ def run_mqtt_loop(
                         "rho": round(results[i].safety_margin, 6),
                         "intervened": bool(results[i].intervened),
                         "age_s": round(ages[i], 4),
+                        "a_nom": list(results[i].a_nom or (0.0, 0.0)),
+                        "a_safe": list(results[i].a_safe or (0.0, 0.0)),
+                        "d_safe": results[i].d_safe,
+                        "accel_saturated": bool(results[i].accel_saturated),
+                        "vel_saturated": bool(results[i].vel_saturated),
+                        "feasible": results[i].feasible,
                     }
 
             if trajectory is not None:
