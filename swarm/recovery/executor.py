@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 
 from swarm.geometry import Vector3
 from swarm.interfaces import RecoveryPlan
+from swarm.safety import safe_holding_point
 
 
 @dataclass
@@ -56,14 +57,23 @@ def apply_plan(
     plan: RecoveryPlan,
     t: float,
     base_goals: dict[int, Vector3],
+    positions: dict[int, Vector3] | None = None,
 ) -> None:
     """Mutate ``active`` in place from a validated recovery plan."""
     for command in plan.commands:
         state = active[command.drone]
         if command.action == "HOLD":
-            state.velocity_scale = 0.0
+            if positions is not None:
+                state.goal_override = safe_holding_point(command.drone, positions)
+                state.goal_override_expiry = t + command.ttl_sec
+                state.velocity_scale = 0.5
+            else:
+                state.velocity_scale = 0.0
             state.velocity_scale_expiry = t + command.ttl_sec
         elif command.action == "YIELD":
+            if positions is not None:
+                state.goal_override = safe_holding_point(command.drone, positions)
+                state.goal_override_expiry = t + command.ttl_sec
             state.velocity_scale = min(state.velocity_scale, 0.4)
             state.velocity_scale_expiry = t + command.ttl_sec
         elif command.action == "REROUTE":

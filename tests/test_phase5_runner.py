@@ -8,6 +8,7 @@ from marllib.envs.multi_uav import MultiUAVEnv
 from marllib.phase5_runner import (
     CRUISE_ALTITUDE_M,
     _priority_order,
+    _propagate_states,
     _scenario,
     _estimated_states_and_aoi,
     build_phase5_command,
@@ -197,6 +198,17 @@ class EstimatorWiringTest(unittest.TestCase):
         )
         self.assertEqual(estimated[2].timestamp_ms, 100)
         self.assertAlmostEqual(aoi[(2, 3)], 0.1)
+
+    def test_propagate_states_dead_reckons_position(self) -> None:
+        state = DroneSnapshot(
+            drone_id=2,
+            position=(1.0, 2.0, 3.0),
+            velocity=(0.5, 0.0, 0.0),
+        )
+        out = _propagate_states({2: state}, {2: 0.5})
+        self.assertAlmostEqual(out[2].position[0], 1.25)
+        self.assertAlmostEqual(out[2].position[1], 2.0)
+        self.assertAlmostEqual(out[2].position[2], 3.0)
 
 
 if __name__ == "__main__":

@@ -78,7 +78,13 @@ def main() -> int:
         max_neighbors=spec["scenario"].max_neighbors,
     )
     params = RuntimeAssuranceParams(tau_ctrl=args.tau_ctrl)
-    ra = RuntimeAssurance(params=params, v_max=1.5, sampled_data=True, gamma=args.gamma)
+    ra = RuntimeAssurance(
+        params=params,
+        v_max=1.5,
+        sampled_data=True,
+        gamma=args.gamma,
+        tau_px4=args.tau_px4,
+    )
     sigma = ra.perception_sigma
 
     base_goals = {

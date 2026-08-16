@@ -128,6 +128,41 @@ claim 收紧为 feasible/well-modeled envelope。
 > SEQUENTIAL_PASS 造成的特定危险配置，四者叠加；barrier 算法在精确 sim 里
 > 本身是保守的。
 
+## 6. 三个最小修复（已实现，待 live 复测）
+
+### 6.1 safe holding-point semantics（修 YIELD/HOLD 原地停车）
+
+- 新增 `swarm/safety.py:safe_holding_point`：从 swarm 质心方向后撤一个
+  `offset` 得到安全 holding point。
+- SEQUENTIAL_PASS 不再对非 right-of-way 直接 `velocity_scale=0`，而是：
+  - 未到 holding point → `goal_override=holding`，`velocity_scale=0.6`；
+  - 到点后 → `goal_override` 清除，`velocity_scale=0`。
+- `executor.apply_plan` 的 `HOLD/YIELD` 同样改为“先撤到 holding point 再停”，
+  并在 `AsyncMissionReplanner._commit` 传入当前 `positions`。
+- 精确 sim 复测：MAPPO + SEQUENTIAL_PASS 的 min `rho` 从 0.19 → 0.26（不再
+  出现“移动 UAV 撞向静止 yielding UAV”的恶劣配置）。
+
+### 6.2 PX4 lag-aware sampled-data prediction
+
+- `RuntimeAssurance` 增加 `tau_px4`；`alpha = 1 - exp(-dt/tau_px4)`。
+- `solve_sampled_data_qp` 的一步预测改为：
+  `v_next = v + alpha*a*dt`、`r_next = r + v*dt + 0.5*alpha*a_rel*dt²`，
+  `s_next` 也用 `v + alpha*a_nom*dt` 计算 closing speed。
+- `tau_px4=0` 时行为与旧版一致（向后兼容）。
+- `phase5_runner.py` 新增 `--tau-px4`，sim/live 均可传入。
+
+### 6.3 AoI state propagation
+
+- `phase5_runner.py:_propagate_states`：把 stale shared state 用
+  `p̂ = p + v*age` 从 telemetry timestamp 传播到当前控制时刻，再交给 RA；
+  `M_comm` 仍保留 telemetry age 的 uncertainty margin，职责分开。
+
+### 6.4 待办
+
+- live 复测：4 机 MAPPO + `--tau-px4 0.2` + SEQUENTIAL_PASS + 真实 telemetry
+  age，看 `min_rho` 是否回到 `>= 0` 或只剩很小 implementation deviation；
+- 若仍 infeasible，则按计划把 claim 收紧为 feasible/well-modeled envelope。
+
 ## 4. 对齐 Phase 7：policy-quality robustness experiment
 
 不要只测一个 checkpoint。做成 **nominal policy × RA** 的因子实验。

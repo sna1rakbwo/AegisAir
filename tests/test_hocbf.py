@@ -6,7 +6,7 @@ import unittest
 
 import numpy as np
 
-from swarm.ra.hocbf import solve_acceleration_qp
+from swarm.ra.hocbf import solve_acceleration_qp, solve_sampled_data_qp
 
 
 class HocbfQpTest(unittest.TestCase):
@@ -80,6 +80,39 @@ class HocbfQpTest(unittest.TestCase):
         )
         self.assertTrue(feasible)
         np.testing.assert_allclose(a_safe[0], [0.5, 0.0])
+
+    def test_sampled_data_qp_lag_alpha_reduces_responsiveness(self) -> None:
+        a_nom = {0: np.array([0.0, 0.0]), 1: np.array([0.0, 0.0])}
+        positions = {0: np.array([-2.0, 0.0]), 1: np.array([2.0, 0.0])}
+        velocities = {0: np.array([0.5, 0.0]), 1: np.array([-0.5, 0.0])}
+        s_now = {(0, 1): 1.0}
+        s_next = {(0, 1): 1.0}
+        a_instant, feasible_instant, _ = solve_sampled_data_qp(
+            a_nom=a_nom,
+            positions=positions,
+            velocities=velocities,
+            s_now=s_now,
+            s_next=s_next,
+            dt=0.05,
+            gamma=0.1,
+            a_max=2.0,
+            alpha=1.0,
+        )
+        a_lag, feasible_lag, _ = solve_sampled_data_qp(
+            a_nom=a_nom,
+            positions=positions,
+            velocities=velocities,
+            s_now=s_now,
+            s_next=s_next,
+            dt=0.05,
+            gamma=0.1,
+            a_max=2.0,
+            alpha=0.5,
+        )
+        self.assertTrue(feasible_instant)
+        self.assertTrue(feasible_lag)
+        # The lag model must not be less conservative than the instant model.
+        self.assertLessEqual(float(a_lag[0][0]), float(a_instant[0][0]) + 1e-6)
 
 
 if __name__ == "__main__":

@@ -62,6 +62,7 @@ class RuntimeAssurance:
         kv: float = 2.0,
         sampled_data: bool = False,
         gamma: float = 0.1,
+        tau_px4: float = 0.0,
     ) -> None:
         self.params = params or RuntimeAssuranceParams()
         self.v_max = v_max
@@ -74,6 +75,7 @@ class RuntimeAssurance:
         self.kv = kv
         self.sampled_data = sampled_data
         self.gamma = gamma
+        self.tau_px4 = tau_px4
         self.trackers: dict[tuple[int, int], PairMarginTracker] = {}
         self.monitor = PredictiveMonitor(q_pred=self.params.q_pred)
         self._last_t: float | None = None
@@ -232,6 +234,11 @@ class RuntimeAssurance:
         if self._last_t is not None:
             dt = max(1e-3, t - self._last_t)
         self._last_t = t
+        alpha = (
+            1.0 - float(np.exp(-dt / self.tau_px4))
+            if self.tau_px4 > 0
+            else 1.0
+        )
         for agent_id, snapshot in snapshots.items():
             if snapshot.velocity is not None:
                 self.monitor.update_acceleration(agent_id, snapshot.velocity, dt)
@@ -280,8 +287,8 @@ class RuntimeAssurance:
                     v_cl_now, pair_aoi, sigma_i, sigma_j, self.params
                 )
 
-                v_pred_i = velocities[i] + a_nom[i] * dt
-                v_pred_j = velocities[j] + a_nom[j] * dt
+                v_pred_i = velocities[i] + alpha * a_nom[i] * dt
+                v_pred_j = velocities[j] + alpha * a_nom[j] * dt
                 v_cl_next = _closing_speed_2d(
                     positions[i], positions[j], v_pred_i, v_pred_j
                 )
@@ -317,6 +324,7 @@ class RuntimeAssurance:
             s_now=s_now,
             s_next=s_next,
             dt=dt,
+            alpha=alpha,
             gamma=self.gamma,
             a_max=self.a_max,
         )

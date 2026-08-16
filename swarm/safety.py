@@ -8,6 +8,33 @@ from typing import Any
 from swarm.geometry import Vector3
 
 
+def safe_holding_point(
+    drone_id: int,
+    positions: dict[int, Vector3],
+    *,
+    offset: float = 1.5,
+    arena: tuple[float, float, float, float] = (-6.0, 6.0, -6.0, 6.0),
+) -> Vector3:
+    """Retreat point away from the swarm centroid, for YIELD/HOLD semantics."""
+    pos = positions[drone_id]
+    others = [positions[d] for d in positions if d != drone_id]
+    if others:
+        cx = sum(p[0] for p in others) / len(others)
+        cy = sum(p[1] for p in others) / len(others)
+    else:
+        cx, cy = 0.0, 0.0
+    dx = pos[0] - cx
+    dy = pos[1] - cy
+    length = math.hypot(dx, dy)
+    if length < 1e-6:
+        dx, dy = 1.0, 0.0
+        length = 1.0
+    ux, uy = dx / length, dy / length
+    x = min(max(pos[0] + ux * offset, arena[0]), arena[1])
+    y = min(max(pos[1] + uy * offset, arena[2]), arena[3])
+    return (x, y, 0.0)
+
+
 def _clip(value: float, low: float = 0.0, high: float = 1.0) -> float:
     return max(low, min(high, value))
 

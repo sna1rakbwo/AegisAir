@@ -10,6 +10,7 @@ from swarm.safety import (
     build_safety_command,
     build_status_event,
     pair_collision_risk,
+    safe_holding_point,
 )
 
 
@@ -154,6 +155,14 @@ class SafetyGateTest(unittest.TestCase):
         self.assertEqual(event["mode"], "override")
         self.assertEqual(event["status"], "safety_override")
         self.assertEqual(event["anomalies"], ["collision_risk"])
+
+
+class SafeHoldingPointTest(unittest.TestCase):
+    def test_retreats_away_from_swarm_centroid(self) -> None:
+        positions = {0: (0.0, 0.0, 0.0), 1: (2.0, 0.0, 0.0)}
+        holding = safe_holding_point(0, positions, offset=1.5)
+        self.assertLess(holding[0], 0.0)
+        self.assertAlmostEqual(holding[1], 0.0)
 
 
 if __name__ == "__main__":

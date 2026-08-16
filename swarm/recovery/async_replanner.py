@@ -375,7 +375,11 @@ class AsyncMissionReplanner:
     ) -> None:
         if plan is None:
             return
-        apply_plan(self.active, plan, t, self._mission_goals)
+        positions = {
+            drone: snap.position
+            for drone, snap in pending.context.snapshots.items()
+        }
+        apply_plan(self.active, plan, t, self._mission_goals, positions)
         self._handled_drones.update(command.drone for command in plan.commands)
         for command in plan.commands:
             if command.action == "REASSIGN" and command.waypoint is not None:

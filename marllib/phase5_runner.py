@@ -52,7 +52,7 @@ from swarm.recovery import (
     ReplanConfig,
     RuleMissionPlanner,
 )
-from swarm.safety import DroneSnapshot
+from swarm.safety import DroneSnapshot, safe_holding_point
 
 
 class _FaultedLlmClient(LLMRecoveryClient):
@@ -402,6 +402,25 @@ def _estimated_states_and_aoi(
     return estimated, aoi
 
 
+def _propagate_states(
+    states: dict[int, Any],
+    ages: dict[int, float],
+) -> dict[int, Any]:
+    """Dead-reckon stale shared state to the current control time."""
+    propagated: dict[int, Any] = {}
+    for i, state in states.items():
+        age = float(ages.get(i, 0.0))
+        if age <= 0.0:
+            propagated[i] = state
+            continue
+        velocity = state.velocity or (0.0, 0.0, 0.0)
+        position = tuple(
+            float(state.position[k]) + float(velocity[k]) * age for k in range(3)
+        )
+        propagated[i] = replace(state, position=position)
+    return propagated
+
+
 def _go_to_goal(
     env: MultiUAVEnv,
     *,
@@ -648,10 +667,24 @@ def run_sim_episode(
                 )
             if seq_state["active"]:
                 right_of_way = seq_state["order"][seq_state["idx"]]
+                sim_positions = {i: env.positions[i] for i in env.agent_ids}
                 for i in env.agent_ids:
-                    overrides.velocity_scale[i] = (
-                        1.0 if i == right_of_way else 0.0
-                    )
+                    if i == right_of_way:
+                        overrides.velocity_scale[i] = 1.0
+                        overrides.goal_override.pop(i, None)
+                        continue
+                    holding = safe_holding_point(i, sim_positions)
+                    if (
+                        np.linalg.norm(
+                            env.positions[i] - np.asarray(holding[:2])
+                        )
+                        < env.scenario.goal_epsilon
+                    ):
+                        overrides.goal_override.pop(i, None)
+                        overrides.velocity_scale[i] = 0.0
+                    else:
+                        overrides.goal_override[i] = holding
+                        overrides.velocity_scale[i] = 0.6
                 if (
                     np.linalg.norm(
                         env.positions[right_of_way]
@@ -844,6 +877,7 @@ def run_mqtt_loop(
     a_max: float = 2.0,
     kv: float = 2.0,
     tau_ctrl: float = 0.0,
+    tau_px4: float = 0.0,
     sampled_data: bool = False,
     gamma: float = 0.1,
     sequential_pass: bool = False,
@@ -872,6 +906,7 @@ def run_mqtt_loop(
         hocbf_k2=hocbf_k2,
         a_max=a_max,
         kv=kv,
+        tau_px4=tau_px4,
         sampled_data=sampled_data,
         gamma=gamma,
     )
@@ -1044,10 +1079,27 @@ def run_mqtt_loop(
                     )
                 if seq_state["active"]:
                     right_of_way = seq_state["order"][seq_state["idx"]]
+                    snap_positions = {
+                        i: snapshots[i].position for i in drone_ids
+                    }
                     for i in drone_ids:
-                        overrides.velocity_scale[i] = (
-                            1.0 if i == right_of_way else 0.0
-                        )
+                        if i == right_of_way:
+                            overrides.velocity_scale[i] = 1.0
+                            overrides.goal_override.pop(i, None)
+                            continue
+                        holding = safe_holding_point(i, snap_positions)
+                        if (
+                            np.linalg.norm(
+                                np.asarray(snapshots[i].position[:2])
+                                - np.asarray(holding[:2])
+                            )
+                            < 0.5
+                        ):
+                            overrides.goal_override.pop(i, None)
+                            overrides.velocity_scale[i] = 0.0
+                        else:
+                            overrides.goal_override[i] = holding
+                            overrides.velocity_scale[i] = 0.6
                     if (
                         np.linalg.norm(
                             np.asarray(snapshots[right_of_way].position[:2])
@@ -1122,6 +1174,7 @@ def run_mqtt_loop(
                     for j in drone_ids
                     if i != j
                 }
+            ra_states = _propagate_states(ra_states, ages)
             results = ra.filter(ra_states, nominal, t=t, aoi=aoi)
             cbf_events += sum(1 for r in results.values() if r.intervened)
             positions = [snapshots[i].position for i in drone_ids]
@@ -1302,6 +1355,7 @@ def main() -> int:
     parser.add_argument("--a-max", type=float, default=2.0)
     parser.add_argument("--kv", type=float, default=2.0)
     parser.add_argument("--tau-ctrl", type=float, default=0.0)
+    parser.add_argument("--tau-px4", type=float, default=0.0)
     parser.add_argument("--sampled-data", action="store_true")
     parser.add_argument("--gamma", type=float, default=0.1)
     parser.add_argument("--sequential-pass", action="store_true")
@@ -1483,6 +1537,7 @@ def main() -> int:
                     a_max=args.a_max,
                     kv=args.kv,
                     tau_ctrl=args.tau_ctrl,
+                    tau_px4=args.tau_px4,
                     sampled_data=args.sampled_data,
                     gamma=args.gamma,
                     sequential_pass=args.sequential_pass,
@@ -1546,6 +1601,7 @@ def main() -> int:
                 a_max=args.a_max,
                 kv=args.kv,
                 tau_ctrl=args.tau_ctrl,
+                tau_px4=args.tau_px4,
                 sampled_data=args.sampled_data,
                 gamma=args.gamma,
                 sequential_pass=args.sequential_pass,
@@ -1591,6 +1647,7 @@ def main() -> int:
         hocbf_k2=args.hocbf_k2,
         a_max=args.a_max,
         kv=args.kv,
+        tau_px4=args.tau_px4,
         sampled_data=args.sampled_data,
         gamma=args.gamma,
     )

@@ -153,6 +153,7 @@ def solve_sampled_data_qp(
     dt: float,
     gamma: float,
     a_max: float,
+    alpha: float = 1.0,
     max_iters: int = 3000,
 ) -> tuple[dict[int, np.ndarray], bool, int]:
     """Centralized sampled-data acceleration QP.
@@ -187,11 +188,11 @@ def solve_sampled_data_qp(
         a_rel_nom = np.asarray(a_nom[i], dtype=np.float64) - np.asarray(
             a_nom[j], dtype=np.float64
         )
-        r_pred = r + v * dt + 0.5 * a_rel_nom * dt * dt
+        r_pred = r + v * dt + 0.5 * alpha * a_rel_nom * dt * dt
         h_now = float(np.dot(r, r)) - sk * sk
         h_next_nom = float(np.dot(r_pred, r_pred)) - s_next[(i, j)] ** 2
 
-        grad = r_pred * (dt * dt)
+        grad = r_pred * (alpha * dt * dt)
         c = np.zeros(2 * n_agents, dtype=np.float64)
         c[2 * ii : 2 * ii + 2] = grad
         c[2 * jj : 2 * jj + 2] = -grad
