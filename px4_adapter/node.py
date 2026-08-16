@@ -166,6 +166,8 @@ def main() -> None:
     parser.add_argument("--mqtt-host", default=None)
     parser.add_argument("--mqtt-port", type=int, default=None)
     parser.add_argument("--origin-offset-ned", default=None)
+    parser.add_argument("--control-rate-hz", type=float, default=None)
+    parser.add_argument("--telemetry-rate-hz", type=float, default=None)
     args = parser.parse_args()
     config = _load_config(args.config)
 
@@ -181,6 +183,10 @@ def main() -> None:
         config.setdefault("telemetry", {})["origin_offset_ned"] = [
             float(v) for v in args.origin_offset_ned.split(",")
         ]
+    if args.control_rate_hz is not None:
+        config.setdefault("control", {})["rate_hz"] = args.control_rate_hz
+    if args.telemetry_rate_hz is not None:
+        config.setdefault("telemetry", {})["publish_rate_hz"] = args.telemetry_rate_hz
     _apply_instance(config, int(config["instance_id"]))
 
     import rclpy
@@ -264,7 +270,10 @@ def main() -> None:
                 self.telemetry_tick,
             )
             if not self.read_only:
-                self.create_timer(0.1, self.control_tick)
+                self.create_timer(
+                    1.0 / float(config["control"].get("rate_hz", 10.0)),
+                    self.control_tick,
+                )
 
         def on_local_position(self, msg: Any) -> None:
             if self.last_position is None:

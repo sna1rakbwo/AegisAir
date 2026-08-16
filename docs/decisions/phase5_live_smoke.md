@@ -145,10 +145,21 @@ rep min_rho     min_distance_m  cbf_events
 首次把当前一阶 velocity CBF + 顺序投影压到失败：每机有 6 个 pairwise 约束、
 4 机同时投影，顺序投影无法在实时动态下维持 `rho >= 0`。
 
+P2 控制率 20Hz 复测（`--control-rate-hz 20 --telemetry-rate-hz 20` +
+`--rate-hz 20`）仍为负：
+
+```text
+rep min_rho     min_distance_m  cbf_events
+1   -0.024696   1.0005          286
+2   -0.078869   0.9471          363
+```
+
+说明 20Hz 不能解决该 No-Go；问题不是单纯采样/控制频率，而是多机同时投影时
+一阶 velocity CBF 本身的可行性不足。
+
 按既有优先级，下一步不是无限加大 `d0`，而是：
-1. P2 控制率 20/50Hz 先测；
-2. P3 用 PX4 实测 `a_eff/tau_ctrl` 回填 `M_dyn`；
-3. 仍失败则升级 HOCBF / acceleration-aware barrier。
+1. P3 用 PX4 实测 `a_eff/tau_ctrl` 回填 `M_dyn`（P2 20Hz 已排除频率问题）；
+2. 升级 HOCBF / acceleration-aware barrier，用加速度作为控制输入。
 
 ## 剩余（还不能说正式冻结）
 

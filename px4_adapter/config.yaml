@@ -37,6 +37,7 @@ safety:
 
 control:
   read_only: true
+  rate_hz: 10.0
   takeoff_altitude_m: 2.5
   target_system: 3
   target_component: 1

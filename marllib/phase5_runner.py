@@ -581,6 +581,7 @@ def run_mqtt_loop(
     max_steps: int,
     trajectory: Path | None = None,
     reset_starts: dict[int, tuple[float, float, float]] | None = None,
+    rate_hz: float = 10.0,
 ) -> dict[str, Any]:
     """Live PX4 loop: arm/takeoff, then RA-filtered closed-loop control.
 
@@ -598,7 +599,7 @@ def run_mqtt_loop(
         _make_replanner(
             client=llm_client,
             fallback=llm_fallback,
-            dt=0.1,
+            dt=1.0 / rate_hz,
         )
         if mode == "ASYNC"
         else None
@@ -657,7 +658,7 @@ def run_mqtt_loop(
     try:
         deadline = time.time() + 30.0
         while time.time() < deadline and not all(i in telemetry for i in drone_ids):
-            time.sleep(0.1)
+            time.sleep(1.0 / rate_hz)
         if not all(i in telemetry for i in drone_ids):
             raise SystemExit("telemetry not ready for all drones")
 
@@ -879,6 +880,7 @@ def main() -> int:
     parser.add_argument("--qwen-max-tokens", type=int, default=48)
     parser.add_argument("--seeds", type=int, default=1)
     parser.add_argument("--max-steps", type=int, default=120)
+    parser.add_argument("--rate-hz", type=float, default=10.0)
     parser.add_argument("--real-time", action="store_true")
     parser.add_argument("--mqtt", action="store_true")
     parser.add_argument(
@@ -1000,6 +1002,7 @@ def main() -> int:
                     max_steps=args.max_steps,
                     trajectory=trajectory,
                     reset_starts=reset_starts,
+                    rate_hz=args.rate_hz,
                 )
                 seed_results.append(
                     {
@@ -1048,6 +1051,7 @@ def main() -> int:
                 max_steps=args.max_steps,
                 trajectory=trajectory,
                 reset_starts=reset_starts,
+                rate_hz=args.rate_hz,
             )
             episodes.append(result)
             print(
