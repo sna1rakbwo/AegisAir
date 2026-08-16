@@ -652,6 +652,7 @@ def run_mqtt_loop(
     tau_ctrl: float = 0.0,
     sampled_data: bool = False,
     gamma: float = 0.1,
+    sequential_pass: bool = False,
 ) -> dict[str, Any]:
     """Live PX4 loop: arm/takeoff, then RA-filtered closed-loop control.
 
@@ -785,6 +786,13 @@ def run_mqtt_loop(
         min_dist: float | None = None
         min_rho: float | None = None
         traj_rows: list[dict[str, Any]] = []
+        seq_state = {
+            "active": False,
+            "order": sorted(drone_ids),
+            "idx": 0,
+            "best": {i: float("inf") for i in drone_ids},
+            "stall": {i: 0 for i in drone_ids},
+        }
         next_deadline = time.monotonic()
         while step < max_steps:
             t = step * period
@@ -793,6 +801,43 @@ def run_mqtt_loop(
             if len(snapshots) != len(drone_ids):
                 time.sleep(0.05)
                 continue
+
+            if sequential_pass:
+                for i in drone_ids:
+                    dist = float(
+                        np.linalg.norm(
+                            np.asarray(snapshots[i].position[:2])
+                            - np.asarray(base_goals[i][:2])
+                        )
+                    )
+                    if dist < seq_state["best"][i] - 0.02:
+                        seq_state["best"][i] = dist
+                        seq_state["stall"][i] = 0
+                    else:
+                        seq_state["stall"][i] += 1
+                if not seq_state["active"] and any(
+                    v >= 8 for v in seq_state["stall"].values()
+                ):
+                    seq_state["active"] = True
+                    seq_state["idx"] = 0
+                    seq_state["best"] = {i: float("inf") for i in drone_ids}
+                    seq_state["stall"] = {i: 0 for i in drone_ids}
+                if seq_state["active"]:
+                    right_of_way = seq_state["order"][seq_state["idx"]]
+                    for i in drone_ids:
+                        overrides.velocity_scale[i] = (
+                            1.0 if i == right_of_way else 0.0
+                        )
+                    if (
+                        np.linalg.norm(
+                            np.asarray(snapshots[right_of_way].position[:2])
+                            - np.asarray(base_goals[right_of_way][:2])
+                        )
+                        < 0.5
+                    ):
+                        seq_state["idx"] += 1
+                        if seq_state["idx"] >= len(seq_state["order"]):
+                            seq_state["active"] = False
 
             nominal: dict[int, np.ndarray] = {}
             for i in drone_ids:
@@ -1115,6 +1160,7 @@ def main() -> int:
                     tau_ctrl=args.tau_ctrl,
                     sampled_data=args.sampled_data,
                     gamma=args.gamma,
+                    sequential_pass=args.sequential_pass,
                 )
                 seed_results.append(
                     {
@@ -1172,6 +1218,7 @@ def main() -> int:
                 tau_ctrl=args.tau_ctrl,
                 sampled_data=args.sampled_data,
                 gamma=args.gamma,
+                sequential_pass=args.sequential_pass,
             )
             episodes.append(result)
             print(

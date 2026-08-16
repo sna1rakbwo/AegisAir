@@ -324,6 +324,22 @@ barrier 全程在线。imperfect MARL（noise=0.4，5 seed）下全部 `rho>0`�
 结论：安全约束制造 deadlock，而 **coordination structure（谁先走）** 才能
 解除它；LLM/rule 的价值是决定通行顺序，barrier 决定怎么走才安全。
 
+## 12. PX4/Gazebo 复测（sampled-data + SEQUENTIAL_PASS）
+
+```text
+scenario          min_rho    min_distance_m  cbf_events
+PX4 2-UAV        0.4218     1.8025          112
+PX4 4-UAV        0.3249     1.3990          210
+```
+
+对比修复前 PX4 4-UAV：`min_rho=-0.76`、`min_distance=0.31m`（near collision）。
+改为 sampled-data barrier + SEQUENTIAL_PASS 后，`min_rho>0`、无碰撞、最小距离
+1.4m。这是 4 机 PX4 的第一次 live 安全通过。
+
+注意：4 机 PX4 该次 400 步（20s）内完成率仍非 100%（顺序通过仍在进行），但
+安全判据 `min_rho>=0` 已满足；完整 mission 需要更长步数或更早触发 sequential
+pass。
+
 ## 8. 主张边界
 
 当前只证明 HOCBF 已实现且 2 机 sim 安全完成；4 机 sim 尚未解决 deadlock，
