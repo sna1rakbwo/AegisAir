@@ -16,6 +16,7 @@ from swarm.ra.margins import (
 )
 from swarm.ra.runtime_assurance import RuntimeAssurance
 from swarm.ra.predictor import closest_point_of_approach, predicted_distance, predicted_min_margin
+from swarm.safety import DroneSnapshot
 
 
 class MarginsTest(unittest.TestCase):
@@ -64,6 +65,23 @@ class CbfTest(unittest.TestCase):
         a, b = cbf_constraint(np.array([0.0, 0.0]), np.array([1.0, 0.0]), np.array([0.0, 0.0]), 1.0, 1.0)
         u = project_safe_action(np.array([1.0, 0.0]), [(a, b)], v_max=2.0)
         self.assertGreaterEqual(np.dot(a, u) + 1e-9, b)
+
+
+class RuntimeAssuranceHocbfTest(unittest.TestCase):
+    def test_hocbf_filter_is_a_real_method(self) -> None:
+        ra = RuntimeAssurance(use_hocbf=True)
+        snapshots = {
+            0: DroneSnapshot(
+                drone_id=0, position=(-2.0, 0.0, 0.0), velocity=(1.0, 0.0, 0.0)
+            ),
+            1: DroneSnapshot(
+                drone_id=1, position=(2.0, 0.0, 0.0), velocity=(-1.0, 0.0, 0.0)
+            ),
+        }
+        nominal = {0: np.array([1.0, 0.0]), 1: np.array([-1.0, 0.0])}
+        results = ra.filter(snapshots, nominal, t=0.0)
+        self.assertEqual(set(results), {0, 1})
+        self.assertIn(results[0].mode, {"normal", "warning", "override"})
 
 
 class PredictorTest(unittest.TestCase):

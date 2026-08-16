@@ -376,47 +376,6 @@ class RuntimeAssurance:
             )
         return results
 
-
-def _projected_sigma(snapshot, direction: np.ndarray, default: float) -> float:
-    """Return the covariance-derived sigma along ``direction``, or the default."""
-    cov = getattr(snapshot, "covariance", None)
-    if cov is None:
-        return default
-    P = np.asarray(cov, dtype=np.float64).reshape(2, 2)
-    variance = float(direction @ P @ direction)
-    if variance <= 0.0:
-        return 0.0
-    return float(np.sqrt(variance))
-
-
-def _closing_speed_2d(
-    p_i: np.ndarray,
-    p_j: np.ndarray,
-    v_i: np.ndarray,
-    v_j: np.ndarray,
-) -> float:
-    delta = np.asarray(p_i, dtype=np.float64) - np.asarray(p_j, dtype=np.float64)
-    distance = float(np.linalg.norm(delta))
-    if distance == 0:
-        return 0.0
-    rel_v = np.asarray(v_i, dtype=np.float64) - np.asarray(v_j, dtype=np.float64)
-    return max(0.0, -float(np.dot(delta, rel_v)) / distance)
-
-
-def _d_safe_2d(
-    closing_speed: float,
-    aoi: float,
-    sigma_i: float,
-    sigma_j: float,
-    params: RuntimeAssuranceParams,
-) -> float:
-    return (
-        params.d0
-        + dynamics_margin(closing_speed, params)
-        + perception_margin(sigma_i, sigma_j, params)
-        + communication_margin(aoi, params)
-    )
-
     def _filter_hocbf(
         self,
         snapshots: dict[int, object],
@@ -464,10 +423,11 @@ def _d_safe_2d(
                     snap_j.velocity or (0.0, 0.0, 0.0),
                 )
                 pair_aoi = aoi.get((i, j), aoi.get((j, i), 0.0))
+                sigma_i, sigma_j = self._pair_sigmas(snap_i, snap_j)
                 d_safe_pair = dynamic_safety_boundary(
                     closing_speed=v_cl,
-                    perception_sigma_i=self.perception_sigma,
-                    perception_sigma_j=self.perception_sigma,
+                    perception_sigma_i=sigma_i,
+                    perception_sigma_j=sigma_j,
                     aoi=pair_aoi,
                     params=self.params,
                 )
@@ -481,8 +441,8 @@ def _d_safe_2d(
                     p_j=snap_j.position,
                     v_i=snap_i.velocity or (0.0, 0.0, 0.0),
                     v_j=snap_j.velocity or (0.0, 0.0, 0.0),
-                    sigma_i=self.perception_sigma,
-                    sigma_j=self.perception_sigma,
+                    sigma_i=sigma_i,
+                    sigma_j=sigma_j,
                     aoi=pair_aoi,
                     params=self.params,
                     horizon=self.params.prediction_horizon,
@@ -571,3 +531,43 @@ def _d_safe_2d(
                 proactive=worst_pred_rho < self.params.rho_pred_threshold,
             )
         return results
+
+def _projected_sigma(snapshot, direction: np.ndarray, default: float) -> float:
+    """Return the covariance-derived sigma along ``direction``, or the default."""
+    cov = getattr(snapshot, "covariance", None)
+    if cov is None:
+        return default
+    P = np.asarray(cov, dtype=np.float64).reshape(2, 2)
+    variance = float(direction @ P @ direction)
+    if variance <= 0.0:
+        return 0.0
+    return float(np.sqrt(variance))
+
+
+def _closing_speed_2d(
+    p_i: np.ndarray,
+    p_j: np.ndarray,
+    v_i: np.ndarray,
+    v_j: np.ndarray,
+) -> float:
+    delta = np.asarray(p_i, dtype=np.float64) - np.asarray(p_j, dtype=np.float64)
+    distance = float(np.linalg.norm(delta))
+    if distance == 0:
+        return 0.0
+    rel_v = np.asarray(v_i, dtype=np.float64) - np.asarray(v_j, dtype=np.float64)
+    return max(0.0, -float(np.dot(delta, rel_v)) / distance)
+
+
+def _d_safe_2d(
+    closing_speed: float,
+    aoi: float,
+    sigma_i: float,
+    sigma_j: float,
+    params: RuntimeAssuranceParams,
+) -> float:
+    return (
+        params.d0
+        + dynamics_margin(closing_speed, params)
+        + perception_margin(sigma_i, sigma_j, params)
+        + communication_margin(aoi, params)
+    )
