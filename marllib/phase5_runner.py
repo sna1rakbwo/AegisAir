@@ -881,6 +881,11 @@ def main() -> int:
     parser.add_argument("--seeds", type=int, default=1)
     parser.add_argument("--max-steps", type=int, default=120)
     parser.add_argument("--rate-hz", type=float, default=10.0)
+    parser.add_argument("--hocbf", action="store_true")
+    parser.add_argument("--hocbf-k1", type=float, default=1.0)
+    parser.add_argument("--hocbf-k2", type=float, default=1.0)
+    parser.add_argument("--a-max", type=float, default=2.0)
+    parser.add_argument("--kv", type=float, default=2.0)
     parser.add_argument("--real-time", action="store_true")
     parser.add_argument("--mqtt", action="store_true")
     parser.add_argument(
@@ -1081,7 +1086,14 @@ def main() -> int:
         )
         return 0
 
-    ra = RuntimeAssurance(v_max=1.5)
+    ra = RuntimeAssurance(
+        v_max=1.5,
+        use_hocbf=args.hocbf,
+        hocbf_k1=args.hocbf_k1,
+        hocbf_k2=args.hocbf_k2,
+        a_max=args.a_max,
+        kv=args.kv,
+    )
     env = MultiUAVEnv(spec["scenario"])
     runs = []
     for seed in range(1, args.seeds + 1):

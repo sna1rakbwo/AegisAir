@@ -48,7 +48,7 @@ Risk-Adaptive Runtime Assurance
       ├── Normalized Safety Margin
       ├── Safety-Margin Degradation
       ├── CV / CPA Predictive Monitor
-      └── Time-Varying CBF / QP
+      └── Acceleration-Aware HOCBF / QP
       ↓
 PX4 Offboard
       ↓
@@ -74,7 +74,7 @@ Runtime\ Assurance\rightarrow Async\ Mission\ Replanning
 `docs/decisions/llm_async_mission_replanning.md`）：
 
 ``` text
-CBF / Runtime Assurance = immediate safety control（同步，当前这一刻不能撞）
+HOCBF / Runtime Assurance = immediate safety control（同步，当前这一刻不能撞）
 LLM = Semantic Mission Manager（异步，为什么原计划不再合理、应该怎么改）
 ```
 
@@ -87,7 +87,7 @@ Protect now -> Understand later -> Replan future
 核心句：
 
 ``` text
-CBF preserves safety; the LLM preserves mission intent under changing constraints.
+HOCBF preserves safety; the LLM preserves mission intent under changing constraints.
 ```
 
 ------------------------------------------------------------------------
@@ -1203,14 +1203,16 @@ intervention，且错误输出无法突破 Safety Gate。
 
 1.  telemetry → observation；
 2.  MARL inference；
-3.  velocity setpoint；
-4.  Runtime Assurance；
-5.  PX4 Offboard；
-6.  head-on；
-7.  crossing；
-8.  multi-UAV。
+3.  MARL `v_nom` → `a_nom = k_v(v_nom - v_actual)`；
+4.  Acceleration-Aware HOCBF 集中式 QP → `a_safe`；
+5.  `v_cmd = v_actual + a_safe*dt` velocity setpoint；
+6.  PX4 Offboard；
+7.  head-on；
+8.  crossing；
+9.  multi-UAV。
 
-**完成标准：** 完整 closed loop 工作。
+**完成标准：** 完整 closed loop 工作，且 head-on / crossing / multi-UAV 满足
+`min rho >= 0`。
 
 ------------------------------------------------------------------------
 
