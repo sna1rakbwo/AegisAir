@@ -42,6 +42,9 @@ from swarm.ra.margins import RuntimeAssuranceParams
 from swarm.ra.runtime_assurance import RuntimeAssurance
 from swarm.recovery import (
     AsyncMissionReplanner,
+    DeterministicRecoveryClient,
+    LLMRecoveryClient,
+    LLMRecoveryResult,
     MlxLmClient,
     RecoveryContext,
     RecoveryOverrides,
@@ -49,6 +52,26 @@ from swarm.recovery import (
     RuleMissionPlanner,
 )
 from swarm.safety import DroneSnapshot
+
+
+class _FaultedLlmClient(LLMRecoveryClient):
+    """Deterministic invalid-LLM stand-in for live fault injection."""
+
+    name = "faulted"
+
+    def __init__(self, raw) -> None:
+        self.raw = raw
+
+    def generate(self, context) -> LLMRecoveryResult:
+        return LLMRecoveryResult(
+            plan=None,
+            raw=self.raw,
+            latency_s=0.0,
+            timeout=False,
+            valid=False,
+            errors=[],
+            backend=self.name,
+        )
 
 
 CRUISE_ALTITUDE_M = 2.5
@@ -807,6 +830,7 @@ def run_mqtt_loop(
     urgent_drone: int | None = None,
     estimator_config: SharedStateEstimatorConfig | None = None,
     estimator_seed: int = 0,
+    replan_timeout_s: float | None = None,
 ) -> dict[str, Any]:
     """Live PX4 loop: arm/takeoff, then RA-filtered closed-loop control.
 
@@ -835,6 +859,11 @@ def run_mqtt_loop(
             client=llm_client,
             fallback=llm_fallback,
             dt=1.0 / rate_hz,
+            config=(
+                ReplanConfig(replan_timeout_s=replan_timeout_s)
+                if replan_timeout_s is not None
+                else ReplanConfig()
+            ),
         )
         if mode == "ASYNC"
         else None
@@ -1178,6 +1207,11 @@ def run_mqtt_loop(
                 "llm_plans_committed": replanner.counters.llm_plans_committed,
                 "fallback_plans_committed": replanner.counters.fallback_plans_committed,
                 "mission_changes": replanner.counters.mission_changes,
+                "llm_timeouts": replanner.counters.llm_timeouts,
+                "llm_syntactic_invalid": replanner.counters.llm_syntactic_invalid,
+                "llm_schema_invalid": replanner.counters.llm_schema_invalid,
+                "llm_semantic_invalid": replanner.counters.llm_semantic_invalid,
+                "llm_execution_invalid": replanner.counters.llm_execution_invalid,
             }
             if replanner is not None
             else None
@@ -1189,7 +1223,9 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--scenario", default="head_on")
     parser.add_argument("--mode", choices=["CBF_ONLY", "ASYNC"], default="ASYNC")
-    parser.add_argument("--llm", choices=["rule", "qwen"], default="rule")
+    parser.add_argument(
+        "--llm", choices=["rule", "qwen", "timeout", "invalid"], default="rule"
+    )
     parser.add_argument(
         "--qwen-model",
         default="/Users/lijiajun/.cache/aegisair-qwen3-4b-4bit-bench",
@@ -1214,6 +1250,7 @@ def main() -> int:
     parser.add_argument("--gamma", type=float, default=0.1)
     parser.add_argument("--sequential-pass", action="store_true")
     parser.add_argument("--urgent-drone", type=int, default=None)
+    parser.add_argument("--replan-timeout-s", type=float, default=None)
     parser.add_argument(
         "--estimator",
         action="store_true",
@@ -1286,12 +1323,18 @@ def main() -> int:
     if args.llm == "rule":
         llm_client = RuleMissionPlanner()
         llm_fallback = None
-    else:
+    elif args.llm == "qwen":
         llm_client = MlxLmClient(
             model_id=args.qwen_model,
             max_tokens=args.qwen_max_tokens,
             load=True,
         )
+        llm_fallback = RuleMissionPlanner()
+    elif args.llm == "timeout":
+        llm_client = DeterministicRecoveryClient(plan_latency_s=0.3)
+        llm_fallback = RuleMissionPlanner()
+    else:  # invalid
+        llm_client = _FaultedLlmClient({"action": "HOVER"})
         llm_fallback = RuleMissionPlanner()
 
     if args.mqtt:
@@ -1376,6 +1419,7 @@ def main() -> int:
                     urgent_drone=args.urgent_drone,
                     estimator_config=estimator_config,
                     estimator_seed=args.estimator_seed,
+                    replan_timeout_s=args.replan_timeout_s,
                 )
                 seed_results.append(
                     {
@@ -1437,6 +1481,7 @@ def main() -> int:
                 urgent_drone=args.urgent_drone,
                 estimator_config=estimator_config,
                 estimator_seed=args.estimator_seed,
+                replan_timeout_s=args.replan_timeout_s,
             )
             episodes.append(result)
             print(

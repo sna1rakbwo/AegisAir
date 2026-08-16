@@ -158,8 +158,8 @@ live 结果同样落到 `/Volumes/Expansion/aegisair_phase6_20260816/`。
 1. ~~把 `SharedStateEstimator` 接入 live 路径~~（已完成：`phase5_runner.py`
    新增 `--estimator` 系列参数，MQTT telemetry -> estimator -> RA）。
 2. ~~单机 live 故障注入（command loss / latency）~~（已完成，见下）。
-3. ~~4 机 sampled-data + SEQUENTIAL_PASS 下注入 delay / dropout~~（已完成，
-   见下；LLM timeout / invalid command 仍待 live 兜底验证）。
+3. ~~4 机 sampled-data + SEQUENTIAL_PASS 下注入 delay / dropout / LLM
+   timeout / invalid command~~（已完成，见下）。
 4. 若 live 结果与本地闸门不一致，回查 estimator / adapter 闭环路径，不放松阈值。
 
 ## 7. live 单机 command-loss / latency 结果（2026-08-16）
@@ -195,7 +195,19 @@ fail-closed（`command_expired`）、packet loss 单调下降（18/27/41），�
 | baseline | 0.236 | 1.19 | 210 |
 | stale 500ms | -0.225 | 1.93 | 1290 |
 | dropout 30% | 0.238 | 1.83 | 32 |
+| llm_timeout | 0.114 | 1.13 | 374 |
+| llm_invalid | 0.720 | 1.92 | 0 |
 
 结论：三种配置真实 `min_distance_m` 均 > 0.25m（无碰撞）。500ms stale 使
 perceived `min_rho` 转负、CBF 干预从 210 升至 1290（fail-safe，更保守）；
 30% dropout 下协方差增长很小，`min_rho` 仍为正，退化不显著。
+
+LLM 故障（`--mode ASYNC` + `--llm timeout|invalid`）：
+
+- `llm_timeout`：4 次 trigger → 4 次 `llm_timeouts` → 4 次 fallback 提交，
+  `llm_plans_committed=0`。
+- `llm_invalid`：4 次 trigger → 4 次 `llm_schema_invalid` → 4 次 fallback 提交，
+  `llm_plans_committed=0`。
+
+两组均无碰撞，验证 validator + fallback 在 live 4 机闭环下兜住 LLM
+timeout / invalid command。
