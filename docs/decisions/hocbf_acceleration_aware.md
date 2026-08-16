@@ -113,14 +113,31 @@ k1,k2     min_rho       cbf_events  qp_infeasible
 说明对称 4 机交叉处在 safety-completion 边界：要 `rho>=0` 就会接近 deadlock。
 这是集中式 QP 在该对称几何下的真实现象，不是求解器错误。
 
+## 6.1 deadlock 处理尝试（未解决）
+
+在 `k1=k2=2` 上加确定性侧向分离 bias（stall 后按 id 奇偶给横向速度），能
+完成 mission，但 `min_rho` 仍小幅为负（约 -0.011~-0.019）。
+
+优先级 yield（stall 时让 id 2/3 停车）同样不能同时满足
+`rho>=0` 和完成：
+
+```text
+scheme            min_rho    completed
+lateral bias      -0.0115    True
+priority yield    -0.0086    False
+```
+
+结论：对称 4 机同时穿越在 `d_safe≈1.5m` 下，当前 HOCBF 无 slack 时无法既安全
+又完成；需要的是 **barrier slack（显式声明软化）**，或预先排序/错峰通过，
+而不是简单侧向/让行。
+
 ## 7. 下一步
 
-1. 增加 **deadlock/无 progress 检测**：连续多步目标距离不降时进入确定性
-   emergency separation（优先级或侧向分离），记录 deadlock rate，不偷偷加
-   barrier slack。
+1. 决定 safety-vs-completion 策略：要么显式 barrier slack 并记录
+   `softened_rate`，要么做 pre-assigned 错峰通过序列；不偷偷加 slack。
 2. 轻量 sim 的 CBF vs HOCBF 对比表（min_rho / violation / collision /
    intervention / control effort / mission time）。
-3. 通过后再接 PX4 velocity-mode。
+3. 先在 2 机与“非对称”多机场景验证无 slack 通过，再回对称 4 机。
 
 ## 8. 主张边界
 
