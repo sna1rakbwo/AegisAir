@@ -15,6 +15,32 @@ sampled-data acceleration barrier（gamma=0.1）
 
 现在进入 **Phase 6：Fault Injection**。
 
+## 1.1 关键缺口：MAPPO 已训练，但未接 live 闭环
+
+MAPPO 已实现并训练完成，checkpoint 在外部盘：
+
+```text
+/Volumes/Expansion/safedrones_marllib_vec/
+  single_uav / head_on / perpendicular / diagonal /
+  randomized_2 / randomized_4 / randomized_8
+  -> seed*/checkpoints/final.pt
+```
+
+轻量 `MultiUAVEnv` 上 Phase 3/4 已用 MAPPO 做过评测。
+
+但 `marllib/phase5_runner.py` 的 **live PX4 闭环 nominal pilot 仍是 rule-based
+`_go_to_goal`（`NOMINAL_GAIN * (goal - position)`），不是 MAPPO**。
+
+论文 MPV 要求：
+
+```text
+MAPPO nominal pilot + PX4/Gazebo multi-UAV
+```
+
+这个组合目前**未打通**。这是 Phase 5 遗留的、必须在最终论文前补齐的一步：
+把训练好的 MAPPO 策略加载进 live 闭环，替换 `_go_to_goal`，再复测
+head-on / crossing / 4 机的 `min_rho >= 0`。
+
 ## 2. 仓库与环境
 
 - 仓库：`/Users/lijiajun/Documents/drone/AegisAir`（private GitHub，已 push，
