@@ -296,6 +296,24 @@ def _scenario(name: str) -> dict[str, Any]:
             "high_drone": None,
         }
 
+    if name == "multi_uav":
+        return {
+            "name": "multi_uav",
+            "scenario": ScenarioConfig(
+                name="multi_uav",
+                num_agents=4,
+                starts=((-3.0, 0.8), (3.0, -0.8), (-3.0, -0.8), (3.0, 0.8)),
+                goals=((3.0, -0.8), (-3.0, 0.8), (3.0, 0.8), (-3.0, -0.8)),
+                speed_limit=1.5,
+            ),
+            "mission_change": None,
+            "change_step": None,
+            "failed_drone": None,
+            "blocked_zone": None,
+            "critical_goal": None,
+            "high_drone": None,
+        }
+
     raise SystemExit(f"unknown scenario: {name}")
 
 

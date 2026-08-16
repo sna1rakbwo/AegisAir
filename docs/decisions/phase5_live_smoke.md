@@ -130,10 +130,30 @@ rep min_rho   min_distance_m  cbf_events
 `min_rho_all = 0.486357 > 0`，10/10 通过，两机都到达各自 goal。轨迹：
 `/Volumes/Expansion/aegisair_phase5_20260816/crossing10_rep*.jsonl`。
 
+## 四机 2v2 交叉（multi-UAV）—— No-Go
+
+4 台 PX4（instance 2/3/4/5）两两对头交叉，ASYNC + rule。首 3 次重复：
+
+```text
+rep min_rho     min_distance_m  cbf_events
+1   -0.025376   1.0677          354
+2   -0.069093   0.9997          464
+3   -0.046738   1.0188          427
+```
+
+`min_rho < 0`，即存在 `d < d_safe` 的瞬间，安全判据**未通过**。这是 4 机场景
+首次把当前一阶 velocity CBF + 顺序投影压到失败：每机有 6 个 pairwise 约束、
+4 机同时投影，顺序投影无法在实时动态下维持 `rho >= 0`。
+
+按既有优先级，下一步不是无限加大 `d0`，而是：
+1. P2 控制率 20/50Hz 先测；
+2. P3 用 PX4 实测 `a_eff/tau_ctrl` 回填 `M_dyn`；
+3. 仍失败则升级 HOCBF / acceleration-aware barrier。
+
 ## 剩余（还不能说正式冻结）
 
-- head-on（固定 + 10 seed 横向抖动）与 crossing 都已过，但仍缺 multi-UAV、
-  P2 控制率扫描、以及 P3 多速度制动标定。
+- head-on 与 crossing 已过；4 机 multi-UAV 未过（当前一阶 CBF 的边界）。
+- 仍需 P2 控制率扫描、P3 多速度制动标定，必要时升级 HOCBF。
 - 尚未做 P2 控制率扫描（10/20/50 Hz）。
 - P3 已做第一次速度阶跃（`marllib/phase5_step_response.py`），实测
   `v0≈1.56 m/s`、`d_brake≈0.59 m`、`a_eff≈2.06 m/s²`、`tau_ctrl < 0.1 s`；
