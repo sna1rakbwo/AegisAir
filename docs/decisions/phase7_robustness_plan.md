@@ -75,6 +75,30 @@ min-rho point: rho=0.3305, residual = h_next_actual - (1-gamma)*h_now = +0.172
    max 0.058s，`M_comm` 约 0.02–0.12m）；
 3. live 用了 `--sequential-pass`，而当前 sim 复现未启用（需补上再对照）。
 
+### 3.2 隔离结果（`phase6_residual_check.py` 已补 `--sequential-pass` / `--aoi-ms`）
+
+同样 MAPPO + sampled-data（`tau_ctrl=0.2`, `gamma=0.1`）在精确 sim 里：
+
+| seq-pass | aoi | 结果 |
+| --- | --- | --- |
+| off | 0 | 不越界，min `rho=0.33` |
+| on | 0 | 不越界，min `rho=0.19` |
+| on | 11ms | **越界**，step 301 `rho=-0.007`（很晚、很浅） |
+| on | 58ms | 不越界，min `rho=0.14` |
+
+结论：
+
+- `sequential-pass` 本身不直接造成越界，只把 min `rho` 压到更低；
+- `aoi` 是**影响因素**：11ms 能让 sim 出现浅越界，但比 live（t≈7s 就
+  `rho=-0.5`）晚且浅得多；
+- 因此 live 的强越界仍主要来自 **PX4 velocity-tracking 动力学**与 sim 的
+  精确 velocity-command 模型的差距，`aoi` 只是叠加项。
+
+下一步：给 sim 加一个更贴近 PX4 的 velocity-tracking 模型（例如一阶速度
+响应 `dv/dt = (v_cmd - v)/tau_px4` 或带加速度上限的跟踪滞后），看能否把
+live 的强越界复现出来；确认后就能决定是修 barrier 的动力学假设，还是把
+claim 收紧为 feasible/well-modeled envelope。
+
 ## 4. 对齐 Phase 7：policy-quality robustness experiment
 
 不要只测一个 checkpoint。做成 **nominal policy × RA** 的因子实验。

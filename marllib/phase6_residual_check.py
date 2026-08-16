@@ -21,7 +21,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from marllib.envs.multi_uav import MultiUAVEnv
-from marllib.phase5_runner import _scenario, _snapshots
+from marllib.phase5_runner import _priority_order, _scenario, _snapshots
 from marllib.policies.mappo import MappoPilot
 from swarm.ra.margins import RuntimeAssuranceParams
 from swarm.ra.runtime_assurance import (
@@ -38,6 +38,9 @@ def main() -> int:
     parser.add_argument("--dt", type=float, default=0.05)
     parser.add_argument("--gamma", type=float, default=0.1)
     parser.add_argument("--tau-ctrl", type=float, default=0.0)
+    parser.add_argument("--sequential-pass", action="store_true")
+    parser.add_argument("--urgent-drone", type=int, default=2)
+    parser.add_argument("--aoi-ms", type=float, default=0.0)
     args = parser.parse_args()
 
     spec = _scenario("multi_uav")
@@ -60,6 +63,15 @@ def main() -> int:
         i: (float(env.goals[i, 0]), float(env.goals[i, 1]), 0.0)
         for i in env.agent_ids
     }
+    aoi = args.aoi_ms / 1000.0
+    seq_state = {
+        "active": False,
+        "order": _priority_order(env.agent_ids, args.urgent_drone),
+        "idx": 0,
+        "best": {i: float("inf") for i in env.agent_ids},
+        "stall": {i: 0 for i in env.agent_ids},
+    }
+    velocity_scale = {i: 1.0 for i in env.agent_ids}
 
     first_neg = None
     min_rho = float("inf")
@@ -69,9 +81,50 @@ def main() -> int:
         positions = {i: env.positions[i] for i in env.agent_ids}
         velocities = {i: env.velocities[i] for i in env.agent_ids}
         goals = {i: np.asarray(base_goals[i][:2]) for i in env.agent_ids}
+
+        if args.sequential_pass:
+            for i in env.agent_ids:
+                dist = float(
+                    np.linalg.norm(env.positions[i] - np.asarray(base_goals[i][:2]))
+                )
+                if dist < seq_state["best"][i] - 0.02:
+                    seq_state["best"][i] = dist
+                    seq_state["stall"][i] = 0
+                else:
+                    seq_state["stall"][i] += 1
+            if not seq_state["active"] and any(
+                v >= 8 for v in seq_state["stall"].values()
+            ):
+                seq_state["active"] = True
+                seq_state["idx"] = 0
+                seq_state["best"] = {i: float("inf") for i in env.agent_ids}
+                seq_state["stall"] = {i: 0 for i in env.agent_ids}
+                seq_state["order"] = _priority_order(env.agent_ids, args.urgent_drone)
+            if seq_state["active"]:
+                right_of_way = seq_state["order"][seq_state["idx"]]
+                for i in env.agent_ids:
+                    velocity_scale[i] = 1.0 if i == right_of_way else 0.0
+                if (
+                    np.linalg.norm(
+                        env.positions[right_of_way]
+                        - np.asarray(base_goals[right_of_way][:2])
+                    )
+                    < env.scenario.goal_epsilon
+                ):
+                    seq_state["idx"] += 1
+                    if seq_state["idx"] >= len(seq_state["order"]):
+                        seq_state["active"] = False
+
         nominal = pilot.actions(positions=positions, velocities=velocities, goals=goals)
+        nominal = {i: nominal[i] * velocity_scale.get(i, 1.0) for i in env.agent_ids}
         snapshots = _snapshots(env)
-        results = ra.filter(snapshots, nominal, t=t)
+        aoi_dict = {
+            (i, j): aoi
+            for i in env.agent_ids
+            for j in env.agent_ids
+            if i != j
+        }
+        results = ra.filter(snapshots, nominal, t=t, aoi=aoi_dict)
 
         a_nom = {i: np.asarray(results[i].a_nom) for i in env.agent_ids}
         a_safe = {i: np.asarray(results[i].a_safe) for i in env.agent_ids}
@@ -84,7 +137,7 @@ def main() -> int:
             for b in range(a + 1, len(ids)):
                 i, j = ids[a], ids[b]
                 vcl = _closing_speed_2d(positions[i], positions[j], velocities[i], velocities[j])
-                s_now = _d_safe_2d(vcl, 0.0, sigma, sigma, params)
+                s_now = _d_safe_2d(vcl, aoi, sigma, sigma, params)
                 d = float(np.linalg.norm(positions[i] - positions[j]))
                 h_now = d * d - s_now * s_now
                 if worst is None or h_now < worst[0]:
@@ -96,7 +149,7 @@ def main() -> int:
             velocities[i] + a_nom[i] * args.dt,
             velocities[j] + a_nom[j] * args.dt,
         )
-        s_next = _d_safe_2d(vcl_next, 0.0, sigma, sigma, params)
+        s_next = _d_safe_2d(vcl_next, aoi, sigma, sigma, params)
         r = positions[i] - positions[j]
         v = velocities[i] - velocities[j]
         a_rel = a_nom[i] - a_nom[j]
@@ -109,7 +162,7 @@ def main() -> int:
         p_j = env.positions[j]
         d_actual = float(np.linalg.norm(p_i - p_j))
         vcl_actual = _closing_speed_2d(p_i, p_j, env.velocities[i], env.velocities[j])
-        s_actual = _d_safe_2d(vcl_actual, 0.0, sigma, sigma, params)
+        s_actual = _d_safe_2d(vcl_actual, aoi, sigma, sigma, params)
         h_next_actual = d_actual * d_actual - s_actual * s_actual
 
         rho = float(np.min([r.safety_margin for r in results.values()]))
