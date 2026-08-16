@@ -71,6 +71,30 @@ class RuleMissionPlannerTest(unittest.TestCase):
         self.assertEqual(by_action["CHANGE_PRIORITY"].priority, "safety")
         self.assertEqual(by_action["YIELD"].drone, 1)
 
+    def test_coordination_degradation_yields_and_reroutes(self) -> None:
+        context = _context({"kind": "priority_change", "high": 0, "low": 1})
+        context = RecoveryContext(
+            event=context.event,
+            agent_i=0,
+            agent_j=0,
+            current_margin=context.current_margin,
+            predicted_min_margin=context.predicted_min_margin,
+            margin_degradation=context.margin_degradation,
+            intervention_count=context.intervention_count,
+            cause="COORDINATION_DEGRADATION",
+            severity=context.severity,
+            snapshots=context.snapshots,
+            current_goals=context.current_goals,
+            base_goals=context.base_goals,
+            priorities=context.priorities,
+            timestamp_ms=context.timestamp_ms,
+            mission_change=None,
+        )
+        plan = RuleMissionPlanner().generate(context).plan
+        actions = {c.action for c in plan.commands}
+        self.assertIn("YIELD", actions)
+        self.assertIn("REROUTE", actions)
+
 
 if __name__ == "__main__":
     unittest.main()

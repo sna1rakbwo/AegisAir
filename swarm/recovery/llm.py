@@ -78,6 +78,9 @@ RECOVERY_SYSTEM_PROMPT = (
     "If mission_change.kind is 'fail_drone', respond with action REASSIGN. "
     "If mission_change.kind is 'block_corridor', respond with action REROUTE. "
     "If mission_change.kind is 'priority_change', respond with action CHANGE_PRIORITY. "
+    "If cause is 'COORDINATION_DEGRADATION' (a symmetric deadlock with no "
+    "goal progress), break the deadlock with YIELD and/or REROUTE so the "
+    "affected drone gives way; never emit velocity or acceleration commands. "
     "Never modify d0, CBF constraints, safety thresholds, or actuator limits. "
     "Never output velocity, acceleration, or turn commands. "
     "Do not include reasoning or markdown; output JSON only."
@@ -440,7 +443,63 @@ class RuleMissionPlanner(DeterministicRecoveryClient):
             return self._block_corridor_plan(context, change)
         if change and change.get("kind") == "priority_change":
             return self._priority_change_plan(context, change)
+        if context.cause == "COORDINATION_DEGRADATION":
+            return self._coordination_degradation_plan(context)
         return super()._build_plan(context)
+
+    def _coordination_degradation_plan(
+        self, context: RecoveryContext
+    ) -> RecoveryPlan:
+        """Deterministic deadlock breaker for a symmetric stand-off.
+
+        The stalled drone yields briefly and reroutes to a lateral waypoint
+        whose sign depends on the drone id.  This breaks the symmetric
+        "everyone waits, nobody moves" state while HOCBF keeps the maneuver
+        collision-free.
+        """
+        drone = context.agent_i
+        snap = context.snapshots[drone]
+        goal = context.base_goals[drone]
+        delta_x = goal[0] - snap.position[0]
+        delta_y = goal[1] - snap.position[1]
+        length = math.hypot(delta_x, delta_y)
+        if length < 1e-6:
+            perp_x, perp_y = 0.0, 1.0
+        else:
+            ux, uy = delta_x / length, delta_y / length
+            perp_x, perp_y = -uy, ux
+        sign = 1.0 if drone % 2 == 0 else -1.0
+        waypoint = (
+            snap.position[0] + perp_x * sign * 2.0,
+            snap.position[1] + perp_y * sign * 2.0,
+            0.0,
+        )
+        commands = [
+            RecoveryCommand(
+                drone=drone,
+                action="YIELD",
+                waypoint=None,
+                priority="normal",
+                ttl_sec=2.0,
+                command_id=f"yield-{context.timestamp_ms}-{drone}",
+            ),
+            RecoveryCommand(
+                drone=drone,
+                action="REROUTE",
+                waypoint=waypoint,
+                priority="normal",
+                ttl_sec=4.0,
+                command_id=f"reroute-{context.timestamp_ms}-{drone}",
+            ),
+        ]
+        return RecoveryPlan(
+            schema_version=1,
+            intent_text=f"break symmetric deadlock for drone {drone}",
+            commands=commands,
+            constraints=None,
+            rationale="deterministic lateral yield for coordination degradation",
+            timestamp_ms=context.timestamp_ms,
+        )
 
     def _fail_drone_plan(
         self, context: RecoveryContext, change: dict[str, Any]

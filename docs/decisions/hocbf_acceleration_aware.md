@@ -131,13 +131,29 @@ priority yield    -0.0086    False
 又完成；需要的是 **barrier slack（显式声明软化）**，或预先排序/错峰通过，
 而不是简单侧向/让行。
 
+## 6.2 LLM deadlock resolution（Semantic Mission Recovery）
+
+把死锁交给高层 LLM：`COORDINATION_DEGRADATION`（无 progress）触发
+`AsyncMissionReplanner`，rule 版 LLM 输出确定性 `YIELD + REROUTE`（按 id 奇偶
+选侧向方向），HOCBF 继续在线过滤。轻量 sim 结果：
+
+```text
+mode                    min_rho    collision  completed  triggers
+HOCBF k=3 + ASYNC rule  -0.0066    False      True       4
+```
+
+即 LLM 死锁解除后 mission 完成、0 碰撞；`min_rho=-0.0066` 仍有一个很小（0.66%）
+的离散化缺口。相比纯 HOCBF 的 deadlock，以及侧向/让行策略，这是当前最接近
+`rho>=0` 且完成的结果。
+
 ## 7. 下一步
 
-1. 决定 safety-vs-completion 策略：要么显式 barrier slack 并记录
-   `softened_rate`，要么做 pre-assigned 错峰通过序列；不偷偷加 slack。
-2. 轻量 sim 的 CBF vs HOCBF 对比表（min_rho / violation / collision /
+1. 关闭剩余 0.66% 离散化缺口：换更小 `dt`、离散时间 CBF，或显式记录该
+   `epsilon` violation（不声称连续时间严格保证）。
+2. 用真实 `MlxLmClient` 替换 rule 版复测，确认 LLM 能产出合法 YIELD/REROUTE。
+3. 轻量 sim 的 CBF vs HOCBF 对比表（min_rho / violation / collision /
    intervention / control effort / mission time）。
-3. 先在 2 机与“非对称”多机场景验证无 slack 通过，再回对称 4 机。
+4. 通过后再接 PX4 velocity-mode。
 
 ## 8. 主张边界
 

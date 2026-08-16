@@ -421,6 +421,7 @@ def run_sim_episode(
     critical_reached = False
     high_reached_step = None
     cbf_events = 0
+    min_rho = float("inf")
     emitted_commands = 0
     rejected_commands = 0
 
@@ -449,6 +450,7 @@ def run_sim_episode(
         snapshots = _snapshots(env)
         results = ra.filter(snapshots, nominal, t=t)
         cbf_events += sum(1 for r in results.values() if r.intervened)
+        min_rho = min(min_rho, min(r.safety_margin for r in results.values()))
 
         if blocked_zone is not None:
             for i in env.agent_ids:
@@ -545,6 +547,7 @@ def run_sim_episode(
         "completed": completed,
         "completion_steps": completion_step,
         "cbf_events": cbf_events,
+        "min_rho": round(min_rho, 6) if min_rho != float("inf") else None,
         "zone_crossed": zone_crossed,
         "critical_reached": critical_reached,
         "high_reached_step": high_reached_step,
