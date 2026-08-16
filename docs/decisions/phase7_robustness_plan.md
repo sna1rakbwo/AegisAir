@@ -53,6 +53,28 @@ live 4 机 + `randomized_4` MAPPO 复测 `min_rho < 0`。用新增的 barrier �
 > RA 能降低对 nominal policy 质量的依赖，但一旦 nominal 把系统带出
 > 可控/可精确建模的安全包络，安全就可能失守。
 
+### 3.1 sim 级复现（已做，`marllib/phase6_residual_check.py`）
+
+在 `MultiUAVEnv` 精确动力学下，用相同 `randomized_4` checkpoint + sampled-data
+barrier（`tau_ctrl=0.2`, `gamma=0.1`, `aoi=0`）复跑，**没有出现 `ρ<0`**：
+
+```text
+min-rho point: rho=0.3305, residual = h_next_actual - (1-gamma)*h_now = +0.172
+```
+
+残差为**正**，说明在精确 sim 里 barrier 的离散预测是**保守**的（实际 h 高于
+预算），不是乐观的。因此：
+
+> live 的 `ρ<0` 不是 sampled-data barrier 算法本身的问题，而是 live 执行/遥测
+> 与 barrier 假设的动力学之间的差距。
+
+候选 live 专属因素（下一步逐一隔离）：
+
+1. PX4 velocity-tracking 动力学 ≠ sim 的离散 velocity-command 模型；
+2. 遥测 age（`aoi`）使 live 的 `d_safe` 被 `M_comm` 抬高（实测 mean 0.011s、
+   max 0.058s，`M_comm` 约 0.02–0.12m）；
+3. live 用了 `--sequential-pass`，而当前 sim 复现未启用（需补上再对照）。
+
 ## 4. 对齐 Phase 7：policy-quality robustness experiment
 
 不要只测一个 checkpoint。做成 **nominal policy × RA** 的因子实验。
