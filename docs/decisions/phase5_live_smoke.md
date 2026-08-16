@@ -63,9 +63,32 @@ cbf_events     = 66
 final_x:       drone2=3.989, drone3=-3.952
 ```
 
+## 10 次 frozen head-on 重复（P4）
+
+同一 frozen 场景（spawn ±3、goal ∓4、ASYNC + rule）重复 10 次，每次先
+`reset-to-start` 再穿越：
+
+```text
+rep  min_rho    min_distance_m  cbf_events
+1    0.367311   2.1363          61
+2    0.622190   1.9987          84
+3    0.644867   1.9924          84
+4    0.614095   2.0148          84
+5    0.595035   2.0014          82
+6    0.603528   1.9760          82
+7    0.440230   2.0596          80
+8    0.419085   2.0784          80
+9    0.413527   2.0365          80
+10   0.414691   2.0611          81
+```
+
+`min_rho_all = 0.367311 > 0`，且 10/10 次两机都到达 goal。该 frozen gate 通过。
+轨迹：`/Volumes/Expansion/aegisair_phase5_20260816/headon10_rep*.jsonl`。
+
 ## 剩余（还不能说正式冻结）
 
-- 这是 1 seed 冒烟，不是 10-seed 统计闸门。
+- 10 次重复已过，但这是**固定几何**（无 per-seed 横向抖动）；论文级统计
+  还需要横向抖动的多 seed 版本。
 - 尚未做 P2 控制率扫描（10/20/50 Hz）。
 - P3 已做第一次速度阶跃（`marllib/phase5_step_response.py`），实测
   `v0≈1.56 m/s`、`d_brake≈0.59 m`、`a_eff≈2.06 m/s²`、`tau_ctrl < 0.1 s`；
@@ -74,11 +97,10 @@ final_x:       drone2=3.989, drone3=-3.952
 
 ## 下一步
 
-1. 同一 frozen head-on 场景重复 10 次，出 `min_rho` 分布与
-   `min_t rho(t) >= 0` 统计（每次从 spawn 重新起飞，或加 reset-to-start）。
+1. 把 spawn/offset/goal 加上 per-seed 横向抖动，跑多 seed 的 head-on 统计。
 2. P2：把 adapter/runner 控制率提到 20/50 Hz 复测。
 3. P3 补速度 0.5/1.0/1.5 m/s 各多次，取 `a_eff=P10(|a_decel|)` 回填 `M_dyn`。
-4. 若 10 次仍失败，再升级 HOCBF，不无限加大 `d0`。
+4. 若多 seed 仍失败，再升级 HOCBF，不无限加大 `d0`。
 
 ## 主张边界
 

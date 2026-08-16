@@ -561,6 +561,7 @@ def run_mqtt_loop(
     port: int,
     max_steps: int,
     trajectory: Path | None = None,
+    reset_starts: dict[int, tuple[float, float, float]] | None = None,
 ) -> dict[str, Any]:
     """Live PX4 loop: arm/takeoff, then RA-filtered closed-loop control.
 
@@ -660,6 +661,23 @@ def run_mqtt_loop(
             for i in drone_ids:
                 publish(i, "takeoff", altitude_m=CRUISE_ALTITUDE_M, native=True)
             time.sleep(0.5)
+
+        # Reset to the frozen start poses before the crossing so repeated
+        # episodes do not start from the previous episode's goal positions.
+        if reset_starts is not None:
+            reset_deadline = time.time() + 45.0
+            while time.time() < reset_deadline and not all(
+                telemetry.get(i) is not None
+                and math.hypot(
+                    telemetry[i].position[0] - reset_starts[i][0],
+                    telemetry[i].position[1] - reset_starts[i][1],
+                )
+                < 0.5
+                for i in drone_ids
+            ):
+                for i in drone_ids:
+                    publish(i, "move_to", target=reset_starts[i], native=False)
+                time.sleep(0.3)
 
         start = time.monotonic()
         step = 0
@@ -855,6 +873,12 @@ def main() -> int:
         default="2,3",
         help="Comma-separated PX4 instance ids for live MQTT mode.",
     )
+    parser.add_argument("--repetitions", type=int, default=1)
+    parser.add_argument(
+        "--starts",
+        default=None,
+        help="Semicolon-separated reset starts, e.g. 2=-3,0,2.5;3=3,0,2.5",
+    )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=1883)
     args = parser.parse_args()
@@ -883,18 +907,65 @@ def main() -> int:
             drone: (float(g[0]), float(g[1]), CRUISE_ALTITUDE_M)
             for drone, g in zip(drone_ids, scenario.goals)
         }
-        result = run_mqtt_loop(
-            drone_ids=drone_ids,
-            base_goals=base_goals,
-            mode=args.mode,
-            llm_client=llm_client,
-            llm_fallback=llm_fallback,
-            host=args.host,
-            port=args.port,
-            max_steps=args.max_steps,
-            trajectory=args.trajectory,
+        if args.starts is not None:
+            reset_starts: dict[int, tuple[float, float, float]] = {}
+            for entry in args.starts.split(";"):
+                if not entry:
+                    continue
+                id_part, vec = entry.split("=", 1)
+                x, y, z = (float(v) for v in vec.split(","))
+                reset_starts[int(id_part)] = (x, y, z)
+        else:
+            reset_starts = {
+                drone: (-3.0 if idx == 0 else 3.0, 0.0, CRUISE_ALTITUDE_M)
+                for idx, drone in enumerate(drone_ids)
+            }
+
+        episodes = []
+        for rep in range(args.repetitions):
+            trajectory = args.trajectory
+            if trajectory is not None and args.repetitions > 1:
+                trajectory = trajectory.with_name(
+                    f"{trajectory.stem}_rep{rep + 1}{trajectory.suffix}"
+                )
+            result = run_mqtt_loop(
+                drone_ids=drone_ids,
+                base_goals=base_goals,
+                mode=args.mode,
+                llm_client=llm_client,
+                llm_fallback=llm_fallback,
+                host=args.host,
+                port=args.port,
+                max_steps=args.max_steps,
+                trajectory=trajectory,
+                reset_starts=reset_starts,
+            )
+            episodes.append(result)
+            print(
+                json.dumps(
+                    {
+                        "rep": rep + 1,
+                        "min_rho": result["min_rho"],
+                        "min_distance_m": result["min_distance_m"],
+                        "cbf_events": result["cbf_events"],
+                    },
+                    ensure_ascii=False,
+                ),
+                flush=True,
+            )
+
+        rho_vals = [e["min_rho"] for e in episodes if e["min_rho"] is not None]
+        print(
+            json.dumps(
+                {
+                    "repetitions": args.repetitions,
+                    "min_rho_all": min(rho_vals) if rho_vals else None,
+                    "episodes": episodes,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
         )
-        print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
 
     ra = RuntimeAssurance(v_max=1.5)
