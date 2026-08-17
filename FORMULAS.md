@@ -66,33 +66,41 @@ h = ||p_i - p_j||² - d_safe²
 
 其中 `r = p_i - p_j`、`v = v_i - v_j`、`s = d_safe`。
 
-### 2.3 sampled-data acceleration barrier（最终冻结）
+### 2.3 robust sampled-data projected barrier（最终冻结）
+
+使用**投影 barrier**（对 acceleration 精确线性、对 τ 仿射）：
 
 ```text
-r_next = r + v·Δt + 0.5·α·a_rel·Δt²
-h_next = ||r_next||² - s_next²  >=  (1 - γ)·h_now
+n = (p_i - p_j) / ||p_i - p_j||            （固定 separation 方向）
+h_underline = n^T r - D_safe                （保守：n^T r ≤ ||r||）
+
+r_next = r + v·Δt + Δt·(β_i a_i - β_j a_j)   （精确离散，见 §3.1）
+
+constraint:
+  inf_{τ_i∈T_i, τ_j∈T_j} [ n^T r_next - D_next ]  >=  (1 - γ)·h_underline
 ```
 
-QP 输出 `a_safe`；不可行时硬刹车回退 `a_safe = clip(-v, -a_max, a_max)`。
+因为对 `a` 线性、对 `β` affine，`(β_i, β_j)` rectangle 的 **4 个顶点**全部进
+QP，即可保证整个 τ interval 的安全（每 pair 4 条约束，4 机 6 pair = 24 条）。
+QP 输出 `a_safe`；不可行时硬刹车 `a_safe = clip(-v, -a_max, a_max)`。
 速度命令：`v_safe = clip(v + a_safe·Δt, -v_max, v_max)`。
 
 ## 3. PX4 执行动力学建模（Phase 6 修复）
 
-### 3.1 一阶速度跟踪
+### 3.1 PX4 一阶速度跟踪（精确离散，ZOH）
 
 ```text
-α = 1 - exp(-Δt / τ_px4)
-v_next = v + α·(v_cmd - v) = v + α·a·Δt
+α = 1 - exp(-Δt / τ)
+β = Δt - τ·α
+
+v_next = (1 - α)·v + α·u
+p_next = p + v·Δt + β·(u - v)
+
+u = v + a·Δt   ⟹   p_next = p + v·Δt + β·a·Δt
 ```
 
-位置预测（trapezoidal）：
-
-```text
-p_next ≈ p + (v + v_next)/2 · Δt
-       = p + v·Δt + 0.5·α·a·Δt²
-```
-
-`τ_px4 = 0` 时 `α = 1`，退化为旧版即时模型。
+`τ = 0` 时 `α=1, β=Δt`，退化为离散 velocity-command 模型
+`p_next = p + v·Δt + a·Δt²`（不再是启发式 `0.5·α·a·Δt²`）。
 
 ### 3.2 AoI 状态传播（dead-reckoning）
 
@@ -197,4 +205,5 @@ ema_lambda=0.8, degradation_dt=0.1, prediction_horizon=1.5,
 rho_pred_threshold=0.0, q_pred=0.0, estimated_recovery_latency=0.5
 ```
 
-Phase 5/6 冻结控制：`sampled-data, gamma=0.1, tau_px4=0.2(live)`。
+Phase 5/6 冻结控制：`sampled-data, gamma=0.1`；`tau_px4 ∈ [tau_min, tau_max]`
+（nominal `tau_px4=0.2`，robust QP 用区间 `[tau_px4_min, tau_px4_max]`）。
