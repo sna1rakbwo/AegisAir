@@ -7,7 +7,11 @@ from dataclasses import dataclass
 import numpy as np
 
 from swarm.ra.cbf import cbf_constraint, project_safe_action
-from swarm.ra.hocbf import solve_acceleration_qp, solve_sampled_data_qp
+from swarm.ra.hocbf import (
+    beta_of_tau,
+    solve_acceleration_qp,
+    solve_robust_sampled_data_qp,
+)
 from swarm.ra.margin import PairMarginTracker, normalized_margin
 from swarm.ra.margins import (
     RuntimeAssuranceParams,
@@ -63,6 +67,8 @@ class RuntimeAssurance:
         sampled_data: bool = False,
         gamma: float = 0.1,
         tau_px4: float = 0.0,
+        tau_px4_min: float | None = None,
+        tau_px4_max: float | None = None,
     ) -> None:
         self.params = params or RuntimeAssuranceParams()
         self.v_max = v_max
@@ -76,6 +82,8 @@ class RuntimeAssurance:
         self.sampled_data = sampled_data
         self.gamma = gamma
         self.tau_px4 = tau_px4
+        self.tau_px4_min = tau_px4_min if tau_px4_min is not None else tau_px4
+        self.tau_px4_max = tau_px4_max if tau_px4_max is not None else tau_px4
         self.trackers: dict[tuple[int, int], PairMarginTracker] = {}
         self.monitor = PredictiveMonitor(q_pred=self.params.q_pred)
         self._last_t: float | None = None
@@ -244,6 +252,13 @@ class RuntimeAssurance:
                 self.monitor.update_acceleration(agent_id, snapshot.velocity, dt)
 
         drone_ids = sorted(snapshots)
+        beta = {
+            i: (
+                beta_of_tau(dt, self.tau_px4_max),
+                beta_of_tau(dt, self.tau_px4_min),
+            )
+            for i in drone_ids
+        }
         positions = {
             i: np.asarray(snapshots[i].position[:2], dtype=np.float64)
             for i in drone_ids
@@ -317,16 +332,16 @@ class RuntimeAssurance:
                 pair_deg[(i, j)] = degradation
                 pair_pred[(i, j)] = pred
 
-        a_safe, feasible, _ = solve_sampled_data_qp(
+        a_safe, feasible, _ = solve_robust_sampled_data_qp(
             a_nom=a_nom,
             positions=positions,
             velocities=velocities,
             s_now=s_now,
             s_next=s_next,
             dt=dt,
-            alpha=alpha,
             gamma=self.gamma,
             a_max=self.a_max,
+            beta=beta,
         )
         self.qp_solve_count += 1
         if not feasible:

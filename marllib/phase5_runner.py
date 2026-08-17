@@ -878,6 +878,8 @@ def run_mqtt_loop(
     kv: float = 2.0,
     tau_ctrl: float = 0.0,
     tau_px4: float = 0.0,
+    tau_px4_min: float | None = None,
+    tau_px4_max: float | None = None,
     sampled_data: bool = False,
     gamma: float = 0.1,
     sequential_pass: bool = False,
@@ -907,6 +909,8 @@ def run_mqtt_loop(
         a_max=a_max,
         kv=kv,
         tau_px4=tau_px4,
+        tau_px4_min=tau_px4_min,
+        tau_px4_max=tau_px4_max,
         sampled_data=sampled_data,
         gamma=gamma,
     )
@@ -1356,6 +1360,8 @@ def main() -> int:
     parser.add_argument("--kv", type=float, default=2.0)
     parser.add_argument("--tau-ctrl", type=float, default=0.0)
     parser.add_argument("--tau-px4", type=float, default=0.0)
+    parser.add_argument("--tau-px4-min", type=float, default=None)
+    parser.add_argument("--tau-px4-max", type=float, default=None)
     parser.add_argument("--sampled-data", action="store_true")
     parser.add_argument("--gamma", type=float, default=0.1)
     parser.add_argument("--sequential-pass", action="store_true")
@@ -1538,6 +1544,8 @@ def main() -> int:
                     kv=args.kv,
                     tau_ctrl=args.tau_ctrl,
                     tau_px4=args.tau_px4,
+                    tau_px4_min=args.tau_px4_min,
+                    tau_px4_max=args.tau_px4_max,
                     sampled_data=args.sampled_data,
                     gamma=args.gamma,
                     sequential_pass=args.sequential_pass,
@@ -1602,6 +1610,8 @@ def main() -> int:
                 kv=args.kv,
                 tau_ctrl=args.tau_ctrl,
                 tau_px4=args.tau_px4,
+                tau_px4_min=args.tau_px4_min,
+                tau_px4_max=args.tau_px4_max,
                 sampled_data=args.sampled_data,
                 gamma=args.gamma,
                 sequential_pass=args.sequential_pass,
@@ -1648,6 +1658,8 @@ def main() -> int:
         a_max=args.a_max,
         kv=args.kv,
         tau_px4=args.tau_px4,
+        tau_px4_min=args.tau_px4_min,
+        tau_px4_max=args.tau_px4_max,
         sampled_data=args.sampled_data,
         gamma=args.gamma,
     )

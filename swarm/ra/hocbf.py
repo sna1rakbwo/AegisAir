@@ -143,6 +143,116 @@ def solve_acceleration_qp(
     return a_safe, feasible, max_iters
 
 
+def beta_of_tau(dt: float, tau: float) -> float:
+    """Position-update coefficient of the exact first-order velocity dynamics.
+
+    For ``dv/dt = (u - v)/tau`` under ZOH over one sample:
+        v_{k+1} = (1-alpha) v_k + alpha u_k
+        p_{k+1} = p_k + v_k dt + beta (u_k - v_k)
+    where ``alpha = 1 - exp(-dt/tau)`` and ``beta = dt - tau*alpha``.  With the
+    acceleration intent ``u_k = v_k + a_k dt`` this becomes
+        p_{k+1} = p_k + v_k dt + beta a_k dt.
+    """
+    if tau <= 0.0:
+        return dt
+    alpha = 1.0 - float(np.exp(-dt / tau))
+    return dt - tau * alpha
+
+
+def solve_robust_sampled_data_qp(
+    *,
+    a_nom: dict[int, np.ndarray],
+    positions: dict[int, np.ndarray],
+    velocities: dict[int, np.ndarray],
+    s_now: dict[tuple[int, int], float],
+    s_next: dict[tuple[int, int], float],
+    dt: float,
+    gamma: float,
+    a_max: float,
+    beta: dict[int, tuple[float, float]],
+    max_iters: int = 3000,
+) -> tuple[dict[int, np.ndarray], bool, int]:
+    """Robust projected-barrier sampled-data QP with tau-interval uncertainty.
+
+    Uses the conservative projected barrier ``n^T r - D`` (a linear sufficient
+    condition for ``||r|| >= D``) so the one-step constraint is exact-linear in
+    the accelerations.  For each pair the four ``(beta_i, beta_j)`` rectangle
+    vertices are all added, making the constraint robust to
+    ``tau_i in [tau_min, tau_max]``.
+    """
+    drone_ids = sorted(positions)
+    n_agents = len(drone_ids)
+    index = {drone: idx for idx, drone in enumerate(drone_ids)}
+
+    x = np.zeros(2 * n_agents, dtype=np.float64)
+    for idx, drone in enumerate(drone_ids):
+        x[2 * idx : 2 * idx + 2] = np.asarray(a_nom[drone], dtype=np.float64)
+
+    halfspaces: list[tuple[np.ndarray, float]] = []
+    for (i, j) in sorted(s_now):
+        ii = index[i]
+        jj = index[j]
+        r = np.asarray(positions[i], dtype=np.float64) - np.asarray(
+            positions[j], dtype=np.float64
+        )
+        v = np.asarray(velocities[i], dtype=np.float64) - np.asarray(
+            velocities[j], dtype=np.float64
+        )
+        dist = float(np.linalg.norm(r))
+        n = r / dist if dist > 1e-9 else np.array([1.0, 0.0])
+        d_now = s_now[(i, j)]
+        d_next = s_next[(i, j)]
+        h_now = float(np.dot(n, r)) - d_now
+        bi_lo, bi_hi = beta[i]
+        bj_lo, bj_hi = beta[j]
+
+        for bi in (bi_lo, bi_hi):
+            for bj in (bj_lo, bj_hi):
+                c = np.zeros(2 * n_agents, dtype=np.float64)
+                c[2 * ii : 2 * ii + 2] = dt * bi * n
+                c[2 * jj : 2 * jj + 2] = -dt * bj * n
+                b = (
+                    (1.0 - gamma) * h_now
+                    - float(np.dot(n, r))
+                    - dt * float(np.dot(n, v))
+                    + d_next
+                )
+                halfspaces.append((c, b))
+
+    corrections = [np.zeros_like(x) for _ in range(len(halfspaces) + 1)]
+    x0 = x.copy()
+    for _ in range(max_iters):
+        cur = x0
+        for idx in range(len(halfspaces) + 1):
+            y = cur + corrections[idx]
+            if idx == 0:
+                proj = _project_box(y, a_max)
+            else:
+                c, b = halfspaces[idx - 1]
+                proj = _project_halfspace(y, c, b)
+            corrections[idx] = y - proj
+            cur = proj
+        x0 = cur
+
+    feasible = np.all(np.abs(x0) <= a_max + 1e-6)
+    for c, b in halfspaces:
+        if float(np.dot(c, x0)) < b - 1e-6:
+            feasible = False
+            break
+
+    a_safe: dict[int, np.ndarray] = {}
+    for idx, drone in enumerate(drone_ids):
+        if feasible:
+            a_safe[drone] = x0[2 * idx : 2 * idx + 2].copy()
+        else:
+            a_safe[drone] = np.clip(
+                -np.asarray(velocities[drone][:2], dtype=np.float64),
+                -a_max,
+                a_max,
+            )
+    return a_safe, feasible, max_iters
+
+
 def solve_sampled_data_qp(
     *,
     a_nom: dict[int, np.ndarray],

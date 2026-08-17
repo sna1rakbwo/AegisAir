@@ -6,7 +6,12 @@ import unittest
 
 import numpy as np
 
-from swarm.ra.hocbf import solve_acceleration_qp, solve_sampled_data_qp
+from swarm.ra.hocbf import (
+    beta_of_tau,
+    solve_acceleration_qp,
+    solve_robust_sampled_data_qp,
+    solve_sampled_data_qp,
+)
 
 
 class HocbfQpTest(unittest.TestCase):
@@ -113,6 +118,50 @@ class HocbfQpTest(unittest.TestCase):
         self.assertTrue(feasible_lag)
         # The lag model must not be less conservative than the instant model.
         self.assertLessEqual(float(a_lag[0][0]), float(a_instant[0][0]) + 1e-6)
+
+    def test_beta_of_tau_exact_discretization(self) -> None:
+        dt = 0.05
+        self.assertAlmostEqual(beta_of_tau(dt, 0.0), dt)
+        self.assertGreater(beta_of_tau(dt, 0.1), beta_of_tau(dt, 0.2))
+        self.assertLess(beta_of_tau(dt, 1e9), 1e-3)
+
+    def test_robust_sampled_data_qp_bounds_and_hard_brake(self) -> None:
+        a_nom = {0: np.array([0.0, 0.0]), 1: np.array([0.0, 0.0])}
+        positions = {0: np.array([-2.0, 0.0]), 1: np.array([2.0, 0.0])}
+        velocities = {0: np.array([0.5, 0.0]), 1: np.array([-0.5, 0.0])}
+        s_now = {(0, 1): 1.0}
+        s_next = {(0, 1): 1.0}
+        a_safe, feasible, _ = solve_robust_sampled_data_qp(
+            a_nom=a_nom,
+            positions=positions,
+            velocities=velocities,
+            s_now=s_now,
+            s_next=s_next,
+            dt=0.05,
+            gamma=0.1,
+            a_max=2.0,
+            beta={0: (0.01, 0.02), 1: (0.01, 0.02)},
+        )
+        self.assertTrue(feasible)
+        self.assertLessEqual(float(np.linalg.norm(a_safe[0])), 2.0 + 1e-6)
+
+        positions = {0: np.array([-0.6, 0.0]), 1: np.array([0.6, 0.0])}
+        velocities = {0: np.array([1.0, 0.0]), 1: np.array([-1.0, 0.0])}
+        s_now = {(0, 1): 1.2}
+        s_next = {(0, 1): 1.2}
+        a_safe, feasible, _ = solve_robust_sampled_data_qp(
+            a_nom=a_nom,
+            positions=positions,
+            velocities=velocities,
+            s_now=s_now,
+            s_next=s_next,
+            dt=0.05,
+            gamma=0.1,
+            a_max=2.0,
+            beta={0: (0.01, 0.02), 1: (0.01, 0.02)},
+        )
+        self.assertFalse(feasible)
+        np.testing.assert_allclose(a_safe[0], [-1.0, 0.0])
 
 
 if __name__ == "__main__":
