@@ -108,16 +108,26 @@ def main() -> int:
     parser.add_argument("--seeds", default="1,2,3,4,5")
     parser.add_argument("--max-steps", type=int, default=120)
     parser.add_argument("--qp-max-iters", type=int, default=300)
+    parser.add_argument("--telemetry-stale-ms", type=int, default=0)
+    parser.add_argument("--estimator-delay-ms", type=int, default=0)
+    parser.add_argument("--estimator-dropout-rate", type=float, default=0.0)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
     if args.qp_max_iters < 1:
         parser.error("--qp-max-iters must be positive")
+    if not 0.0 <= args.estimator_dropout_rate <= 1.0:
+        parser.error("--estimator-dropout-rate must be in [0, 1]")
     scenario_names = [name.strip() for name in args.scenarios.split(",") if name.strip()]
     seeds = [int(seed) for seed in args.seeds.split(",") if seed.strip()]
     if not scenario_names or not seeds:
         parser.error("at least one scenario and one seed are required")
 
     rows: list[dict[str, Any]] = []
+    fault = {
+        "telemetry_stale_ms": args.telemetry_stale_ms,
+        "estimator_delay_ms": args.estimator_delay_ms,
+        "estimator_dropout_rate": args.estimator_dropout_rate,
+    }
     for scenario_name in scenario_names:
         spec = _scenario(scenario_name)
         for seed in seeds:
@@ -132,6 +142,7 @@ def main() -> int:
                     llm_fallback=None,
                     max_steps=args.max_steps,
                     real_time=False,
+                    fault=fault,
                 )
                 rows.append({
                     "scenario": scenario_name,
@@ -147,6 +158,7 @@ def main() -> int:
         "conditions": list(CONDITIONS),
         "max_steps": args.max_steps,
         "qp_max_iters": args.qp_max_iters,
+        "fault": fault,
     }
     output = {"config": config, "summary": summarize(rows), "episodes": rows}
     args.out.parent.mkdir(parents=True, exist_ok=True)

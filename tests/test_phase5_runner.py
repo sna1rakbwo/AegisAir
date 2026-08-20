@@ -177,6 +177,11 @@ class Phase6FaultInjectionTest(unittest.TestCase):
         self.assertFalse(run["collision"])
         self.assertGreater(run["rejected_reasons"].get("telemetry_stale", 0), 0)
 
+    def test_estimator_dropout_runs_through_ra(self) -> None:
+        run = self._run({"estimator_dropout_rate": 0.3})
+        self.assertIn("min_rho", run)
+        self.assertGreater(run["emitted_commands"], 0)
+
 
 class EstimatorWiringTest(unittest.TestCase):
     def test_estimated_states_and_aoi_uses_estimator_age(self) -> None:

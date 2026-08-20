@@ -567,6 +567,14 @@ def run_sim_episode(
 ) -> dict[str, Any]:
     env.reset(seed=seed)
     fault = fault or {}
+    estimator_config = None
+    if ("estimator_delay_ms" in fault or "estimator_dropout_rate" in fault):
+        estimator_config = SharedStateEstimatorConfig(
+            delay_ms=int(fault.get("estimator_delay_ms") or 0),
+            dropout_rate=float(fault.get("estimator_dropout_rate") or 0.0),
+        )
+    estimator = SharedStateEstimator(estimator_config) if estimator_config else None
+    estimator_rng = np.random.default_rng(seed + 10_000_019) if estimator else None
     replan_config = (
         ReplanConfig(replan_timeout_s=replan_timeout_s)
         if replan_timeout_s is not None
@@ -715,6 +723,14 @@ def run_sim_episode(
                 for j in env.agent_ids
                 if i != j
             }
+        if estimator is not None:
+            snapshots, estimator_aoi = _estimated_states_and_aoi(
+                snapshots,
+                estimator,
+                int(t * 1000),
+                estimator_rng,
+            )
+            aoi.update(estimator_aoi)
         results = ra.filter(snapshots, nominal, t=t, aoi=aoi)
         cbf_events += sum(1 for r in results.values() if r.intervened)
         min_rho = min(min_rho, min(r.safety_margin for r in results.values()))
