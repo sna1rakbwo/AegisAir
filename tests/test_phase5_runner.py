@@ -10,6 +10,7 @@ from marllib.phase5_runner import (
     _priority_order,
     _propagate_states,
     _scenario,
+    _estimator_config_for_fault,
     _estimated_states_and_aoi,
     build_phase5_command,
     build_phase5_velocity_command,
@@ -19,7 +20,7 @@ from marllib.phase5_runner import (
     validate_command_path,
 )
 from px4_adapter.mqtt_codec import decode_command, normalize_command_to_ned
-from swarm.estimation import SharedStateEstimator, SharedStateEstimatorConfig
+from swarm.estimation import EstimatedState, SharedStateEstimator, SharedStateEstimatorConfig
 from swarm.ra.margins import RuntimeAssuranceParams
 from swarm.ra.runtime_assurance import RuntimeAssurance
 from swarm.safety import DroneSnapshot
@@ -218,6 +219,30 @@ class EstimatorWiringTest(unittest.TestCase):
         self.assertAlmostEqual(out[2].position[0], 1.25)
         self.assertAlmostEqual(out[2].position[1], 2.0)
         self.assertAlmostEqual(out[2].position[2], 3.0)
+
+    def test_propagate_states_dead_reckons_estimated_state(self) -> None:
+        state = EstimatedState(
+            drone_id=2,
+            position=(1.0, 0.0, 0.0),
+            velocity=(0.5, 0.0, 0.0),
+            covariance=(0.04, 0.0, 0.0, 0.04),
+            timestamp_ms=100,
+            dropped=True,
+        )
+        out = _propagate_states({2: state}, {2: 0.5})
+        self.assertAlmostEqual(out[2].position[0], 1.25)
+        self.assertAlmostEqual(out[2].position[1], 0.0)
+        self.assertAlmostEqual(out[2].covariance[0], 0.04)
+
+    def test_estimator_config_covariance_matches_injected_noise(self) -> None:
+        cfg = _estimator_config_for_fault(
+            {
+                "estimator_dropout_rate": 0.3,
+                "perception_noise_pos_m": 0.2,
+            }
+        )
+        self.assertAlmostEqual(cfg.measurement_cov_m2, 0.04)
+        self.assertEqual(cfg.dropout_rate, 0.3)
 
 
 if __name__ == "__main__":

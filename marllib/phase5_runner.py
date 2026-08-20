@@ -421,6 +421,22 @@ def _estimated_states_and_aoi(
     return estimated, aoi
 
 
+def _estimator_config_for_fault(fault: dict[str, Any]) -> SharedStateEstimatorConfig:
+    """Build the shared-state estimator config calibrated to the injected fault.
+
+    The estimator's measurement covariance must match the injected perception
+    noise so that ``perception_margin`` covers the actual zero-mean sensor noise
+    instead of a hard-coded sigma.
+    """
+
+    pos_sigma = float(fault.get("perception_noise_pos_m") or 0.0)
+    return SharedStateEstimatorConfig(
+        delay_ms=int(fault.get("estimator_delay_ms") or 0),
+        dropout_rate=float(fault.get("estimator_dropout_rate") or 0.0),
+        measurement_cov_m2=pos_sigma * pos_sigma,
+    )
+
+
 def _propagate_states(
     states: dict[int, Any],
     ages: dict[int, float],
@@ -588,10 +604,7 @@ def run_sim_episode(
     fault = fault or {}
     estimator_config = None
     if ("estimator_delay_ms" in fault or "estimator_dropout_rate" in fault):
-        estimator_config = SharedStateEstimatorConfig(
-            delay_ms=int(fault.get("estimator_delay_ms") or 0),
-            dropout_rate=float(fault.get("estimator_dropout_rate") or 0.0),
-        )
+        estimator_config = _estimator_config_for_fault(fault)
     estimator = SharedStateEstimator(estimator_config) if estimator_config else None
     estimator_rng = np.random.default_rng(seed + 10_000_019) if estimator else None
     replan_config = (
@@ -744,13 +757,19 @@ def run_sim_episode(
                 if i != j
             }
         if estimator is not None:
+            now_ms = int(t * 1000)
             snapshots, estimator_aoi = _estimated_states_and_aoi(
                 snapshots,
                 estimator,
-                int(t * 1000),
+                now_ms,
                 estimator_rng,
             )
             aoi.update(estimator_aoi)
+            ages = {
+                i: max(0.0, (now_ms - snapshots[i].timestamp_ms) / 1000.0)
+                for i in snapshots
+            }
+            snapshots = _propagate_states(snapshots, ages)
         results = ra.filter(snapshots, nominal, t=t, aoi=aoi)
         cbf_events += sum(1 for r in results.values() if r.intervened)
         min_rho = min(min_rho, min(r.safety_margin for r in results.values()))

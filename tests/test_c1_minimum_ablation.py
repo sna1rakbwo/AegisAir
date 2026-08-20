@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import unittest
 
-from marllib.run_c1_minimum_ablation import ABLATIONS, SCENARIOS, params_for, scenario_spec
+from marllib.run_c1_minimum_ablation import (
+    ABLATIONS,
+    SCENARIOS,
+    make_controller,
+    params_for,
+    scenario_spec,
+)
 
 
 class C1MinimumAblationTest(unittest.TestCase):
@@ -20,6 +26,16 @@ class C1MinimumAblationTest(unittest.TestCase):
         self.assertEqual(set(SCENARIOS), {"randomized_start_goal", "dense_intersection", "perception_dropout", "telemetry_delay"})
         for name in SCENARIOS:
             self.assertEqual(scenario_spec(name)["scenario"].num_agents, 4)
+
+    def test_telemetry_delay_uses_stale_estimator_state(self) -> None:
+        self.assertEqual(
+            SCENARIOS["telemetry_delay"]["fault"],
+            {"estimator_delay_ms": 300},
+        )
+
+    def test_make_controller_has_zero_default_perception_sigma(self) -> None:
+        ra = make_controller("full_envelope", qp_max_iters=10, speed_limit=1.5)
+        self.assertEqual(ra.perception_sigma, 0.0)
 
 
 if __name__ == "__main__":

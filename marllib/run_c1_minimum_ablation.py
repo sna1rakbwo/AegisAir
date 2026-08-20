@@ -39,7 +39,10 @@ SCENARIOS: dict[str, dict[str, Any]] = {
             "estimator_dropout_rate": 0.3,
         }
     },
-    "telemetry_delay": {"fault": {"telemetry_stale_ms": 300}},
+    # Feed RA a truly stale estimate rather than current truth plus only an
+    # AoI scalar.  ``run_sim_episode`` then dead-reckons it to the control
+    # instant and derives AoI from the same timestamp.
+    "telemetry_delay": {"fault": {"estimator_delay_ms": 300}},
 }
 
 
@@ -83,6 +86,7 @@ def params_for(ablation: str) -> RuntimeAssuranceParams:
 def make_controller(ablation: str, *, qp_max_iters: int, speed_limit: float) -> RuntimeAssurance:
     return RuntimeAssurance(
         params=params_for(ablation),
+        perception_sigma=0.0,
         v_max=speed_limit,
         a_max=2.0,
         kv=2.0,
