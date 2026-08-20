@@ -24,14 +24,19 @@ from marllib.envs.multi_uav import MultiUAVEnv
 from marllib.policies.mappo import MAPPO
 
 
-def evaluate_checkpoint(scenario, checkpoint: Path, eval_seeds: int = 20) -> dict:
+def evaluate_checkpoint(
+    scenario,
+    checkpoint: Path,
+    eval_seeds: int = 20,
+    eval_seed_start: int = 0,
+) -> dict:
     env = MultiUAVEnv(scenario, max_steps=200)
     model = MAPPO(env.obs_dim, 2, env.num_agents * 6, scenario.speed_limit)
     model.load_state_dict(torch.load(checkpoint, weights_only=False))
 
     reached = 0
     collisions = 0
-    for seed in range(eval_seeds):
+    for seed in range(eval_seed_start, eval_seed_start + eval_seeds):
         obs, _ = env.reset(seed=seed)
         done_reached = False
         done_collision = False
@@ -55,6 +60,7 @@ def evaluate_checkpoint(scenario, checkpoint: Path, eval_seeds: int = 20) -> dic
         "reached": reached,
         "collisions": collisions,
         "eval_seeds": eval_seeds,
+        "eval_seed_start": eval_seed_start,
     }
 
 
@@ -62,7 +68,19 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Evaluate the Phase 1 sweep checkpoints")
     parser.add_argument("--output", default="/Volumes/Expansion/safedrones_marllib_vec")
     parser.add_argument("--eval-seeds", type=int, default=20)
+    parser.add_argument(
+        "--eval-seed-start",
+        type=int,
+        default=0,
+        help="First deterministic evaluation seed; keep it disjoint from training seeds.",
+    )
     parser.add_argument("--training-seeds", default="1,2,3,4,5")
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="Summary destination; defaults to OUTPUT/eval_summary.json.",
+    )
     args = parser.parse_args()
 
     output_root = Path(args.output)
@@ -76,7 +94,12 @@ def main() -> int:
             checkpoint = output_root / scenario.name / f"seed{seed}" / "checkpoints" / "final.pt"
             if not checkpoint.exists():
                 continue
-            result = evaluate_checkpoint(scenario, checkpoint, args.eval_seeds)
+            result = evaluate_checkpoint(
+                scenario,
+                checkpoint,
+                args.eval_seeds,
+                args.eval_seed_start,
+            )
             scenario_stats["n"] += 1
             scenario_stats["reached"] += result["reached"]
             scenario_stats["collisions"] += result["collisions"]
@@ -86,9 +109,16 @@ def main() -> int:
             scenario_stats["collision_rate"] = scenario_stats["collisions"] / (scenario_stats["n"] * args.eval_seeds)
         summary[scenario.name] = scenario_stats
 
-    out = output_root / "eval_summary.json"
-    out.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
-    print(json.dumps(summary, indent=2, ensure_ascii=False))
+    payload = {
+        "training_seeds": training_seeds,
+        "eval_seed_start": args.eval_seed_start,
+        "eval_seeds": args.eval_seeds,
+        "summary": summary,
+    }
+    out = args.out or output_root / "eval_summary.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
     return 0
 
 
