@@ -3,6 +3,10 @@
 - 日期：2026-08-20
 - 状态：已撤回为 C2 主实验的解释。
 
+正式 C2 v2 的执行一致性矩阵与 dense audit 见
+`docs/decisions/minimum_c2_v2_exact_zoh_result.md`；本文件只保留 v1 旁路审计的
+来历和边界。
+
 ## 原因
 
 这轮运行比较的是 nominal-\(\tau\) 与 robust-\(\tau\) interval 的 episode-level
