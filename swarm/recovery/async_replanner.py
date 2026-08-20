@@ -68,6 +68,10 @@ class ReplanConfig:
     stall_epsilon_m: float = 0.05
     replan_cooldown_s: float = 3.0
     replan_timeout_s: float = 10.0
+    # Async queue: never block the recovery decision on the LLM.  On trigger,
+    # commit the deterministic rule fallback immediately and let the LLM keep
+    # generating in the background purely as an advisor for future triggers.
+    immediate_fallback: bool = False
 
 
 @dataclass
@@ -110,6 +114,7 @@ class AsyncMissionReplanner:
         config: ReplanConfig | None = None,
         dt: float = 0.1,
         blocking: bool = False,
+        initial_priorities: dict[int, str] | None = None,
     ) -> None:
         self.client = client or DeterministicRecoveryClient()
         self.fallback = fallback or DeterministicRecoveryClient()
@@ -117,6 +122,7 @@ class AsyncMissionReplanner:
         self.config = config or ReplanConfig()
         self.dt = dt
         self.blocking = blocking
+        self._initial_priorities = initial_priorities or {}
         self.counters = ReplanCounters()
         self.active: dict[int, ActiveRecovery] = {}
         self._base_starts: dict[int, Vector3] = {}
@@ -144,6 +150,9 @@ class AsyncMissionReplanner:
     ) -> RecoveryOverrides:
         if not self.active:
             self.active = default_active(list(snapshots))
+            for drone, priority in self._initial_priorities.items():
+                if drone in self.active:
+                    self.active[drone].priority = priority
         if not self._base_starts:
             self._base_starts = {
                 i: snapshots[i].position for i in snapshots
@@ -303,6 +312,14 @@ class AsyncMissionReplanner:
 
         if self.blocking:
             self._wait_and_commit(pending, t, base_goals)
+        elif self.config.immediate_fallback:
+            self._commit(
+                self.fallback.generate(context).plan,
+                pending,
+                t,
+                base_goals,
+                source="fallback",
+            )
         else:
             self._pending = pending
 

@@ -361,6 +361,50 @@ def _scenario(name: str) -> dict[str, Any]:
             "high_drone": None,
         }
 
+    if name == "reassign_3":
+        # Greedy "nearest healthy drone takes over the orphan" is suboptimal here:
+        # drone 1 is nearest to G0 but its own goal (2, 0) is almost free to keep,
+        # while drone 2's own goal (5, -4) is expensive.  Reassigning drone 2 to G0
+        # forfeits the expensive goal and cuts total path roughly 10.4 -> 6.1 m.
+        return {
+            "name": "reassign_3",
+            "scenario": ScenarioConfig(
+                name="reassign_3",
+                num_agents=3,
+                starts=((-5.0, 1.0), (0.0, 0.0), (0.0, 4.0)),
+                goals=((1.0, 0.0), (2.0, 0.0), (5.0, -4.0)),
+            ),
+            "mission_change": {"kind": "fail_drone", "drone": 0},
+            "change_step": 0,
+            "failed_drone": 0,
+            "blocked_zone": None,
+            "critical_goal": None,
+            "high_drone": None,
+        }
+
+    if name == "priority_reassign":
+        # Qualitative semantic constraint: drone 1 is the nearest healthy drone to
+        # the orphan, but it is "critical" and must keep its own mission.  The rule
+        # planner's nearest-healthy heuristic ignores priority and would divert
+        # drone 1; the correct recovery reassigns the normal-priority drone 2.
+        return {
+            "name": "priority_reassign",
+            "scenario": ScenarioConfig(
+                name="priority_reassign",
+                num_agents=3,
+                starts=((-5.0, 1.0), (0.0, 0.0), (0.0, 4.0)),
+                goals=((1.0, 0.0), (2.0, 0.0), (5.0, -4.0)),
+            ),
+            "mission_change": {"kind": "fail_drone", "drone": 0},
+            "change_step": 0,
+            "failed_drone": 0,
+            "blocked_zone": None,
+            "critical_goal": None,
+            "high_drone": None,
+            "priorities": {1: "critical", 2: "normal"},
+            "critical_drone": 1,
+        }
+
     if name == "multi_uav":
         return {
             "name": "multi_uav",
@@ -651,12 +695,14 @@ def _make_replanner(
     fallback,
     dt: float,
     config: ReplanConfig | None = None,
+    initial_priorities: dict[int, str] | None = None,
 ) -> AsyncMissionReplanner:
     return AsyncMissionReplanner(
         client=client,
         fallback=fallback,
         config=config or ReplanConfig(),
         dt=dt,
+        initial_priorities=initial_priorities,
     )
 
 
@@ -816,6 +862,7 @@ def run_sim_episode(
     execution_tau_s: float = 0.0,
     execution_audit_samples: int = 0,
     replan_timeout_s: float | None = None,
+    immediate_fallback: bool = False,
     pilot: MappoPilot | None = None,
 ) -> dict[str, Any]:
     if observation_mode not in OBSERVATION_MODES:
@@ -838,17 +885,17 @@ def run_sim_episode(
         if observation_mode == OBSERVATION_LOCAL_FRESH_SELF
         else None
     )
-    replan_config = (
-        ReplanConfig(replan_timeout_s=replan_timeout_s)
-        if replan_timeout_s is not None
-        else ReplanConfig()
-    )
+    replan_kwargs: dict[str, Any] = {"immediate_fallback": immediate_fallback}
+    if replan_timeout_s is not None:
+        replan_kwargs["replan_timeout_s"] = replan_timeout_s
+    replan_config = ReplanConfig(**replan_kwargs)
     replanner = (
         _make_replanner(
             client=llm_client,
             fallback=llm_fallback,
             dt=env.scenario.dt,
             config=replan_config,
+            initial_priorities=spec.get("priorities"),
         )
         if mode == "ASYNC"
         else None
@@ -866,12 +913,14 @@ def run_sim_episode(
     blocked_zone = spec.get("blocked_zone")
     critical_goal = spec.get("critical_goal")
     high_drone = spec.get("high_drone")
+    critical_drone = spec.get("critical_drone")
 
     collision = False
     completed = False
     completion_step = max_steps
     zone_crossed = False
     critical_reached = False
+    priority_violation = False
     high_reached_step = None
     cbf_events = 0
     min_rho = float("inf")
@@ -1166,7 +1215,7 @@ def run_sim_episode(
         reached_base = {
             i
             for i in env.agent_ids
-            if np.linalg.norm(env.positions[i] - np.asarray(base_goals[i][:2])) < env.scenario.goal_epsilon
+            if np.linalg.norm(env.positions[i] - env.goals[i]) < env.scenario.goal_epsilon
         }
         all_done = (
             critical_reached
@@ -1186,12 +1235,16 @@ def run_sim_episode(
             time.sleep(env.scenario.dt)
 
     if replanner is not None:
+        if critical_drone is not None:
+            state = replanner.active.get(critical_drone)
+            priority_violation = state is not None and state.goal_override is not None
         replanner.shutdown()
 
     return {
         "observation_mode": observation_mode,
         "collision": collision,
         "completed": completed,
+        "priority_violation": priority_violation,
         "completion_steps": completion_step,
         "cbf_events": cbf_events,
         "min_rho": round(min_rho, 6) if min_rho != float("inf") else None,

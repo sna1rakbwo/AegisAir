@@ -136,6 +136,22 @@ class AsyncMissionReplannerTest(unittest.TestCase):
         self.assertEqual(replanner.counters.plans_committed, 1)
         replanner.shutdown()
 
+    def test_immediate_fallback_commits_same_step(self) -> None:
+        replanner = AsyncMissionReplanner(
+            client=DeterministicRecoveryClient(plan_latency_s=0.3),
+            fallback=DeterministicRecoveryClient(),
+            config=ReplanConfig(immediate_fallback=True),
+        )
+        self._step(replanner, 0.0, [(0.0, 0.0, 0.0)], mission_change={"drone": 0})
+        self.assertEqual(replanner.counters.triggers, 1)
+        # Async queue: the deterministic rule plan is committed immediately,
+        # without waiting for the slow LLM future to resolve.
+        self.assertEqual(replanner.counters.plans_committed, 1)
+        self.assertEqual(replanner.counters.fallback_plans_committed, 1)
+        self.assertEqual(replanner.counters.llm_plans_committed, 0)
+        self.assertEqual(replanner.counters.llm_calls, 1)
+        replanner.shutdown()
+
     def test_llm_timeout_falls_back(self) -> None:
         replanner = AsyncMissionReplanner(
             client=DeterministicRecoveryClient(plan_latency_s=0.3),

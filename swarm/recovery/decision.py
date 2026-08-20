@@ -62,8 +62,10 @@ def expand_decision(
         )
         target = context.base_goals[failed]
         commands = [
-            _cmd(failed, "ABORT", None, ts, "abort"),
-            _cmd(healthy, "REASSIGN", target, ts, "reassign"),
+            # Persistent mission reassignment targets a static goal, so the
+            # plan must remain valid beyond the local LLM's inference latency.
+            _cmd(failed, "ABORT", None, ts, "abort", ttl_sec=10.0),
+            _cmd(healthy, "REASSIGN", target, ts, "reassign", ttl_sec=10.0),
         ]
         intent = f"reassign task of failed drone {failed} to drone {healthy}"
 
