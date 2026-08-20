@@ -267,6 +267,25 @@ def _scenario(name: str) -> dict[str, Any]:
             "high_drone": None,
         }
 
+    if name == "high_closing":
+        return {
+            "name": "high_closing",
+            "scenario": ScenarioConfig(
+                name="high_closing",
+                num_agents=2,
+                starts=((-6.0, 0.0), (6.0, 0.0)),
+                goals=((6.0, 0.0), (-6.0, 0.0)),
+                speed_limit=2.0,
+                accel_limit=3.0,
+            ),
+            "mission_change": None,
+            "change_step": None,
+            "failed_drone": None,
+            "blocked_zone": None,
+            "critical_goal": None,
+            "high_drone": None,
+        }
+
     if name == "priority_conflict":
         return {
             "name": "priority_conflict",

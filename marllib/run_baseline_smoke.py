@@ -52,11 +52,11 @@ class ObserveOnlyRA:
         }
 
 
-def make_controller(condition: str, *, qp_max_iters: int):
+def make_controller(condition: str, *, qp_max_iters: int, v_max: float = 1.5):
     """Create one independent controller for an episode and condition."""
     common: dict[str, Any] = {
         "params": RuntimeAssuranceParams(tau_ctrl=0.0),
-        "v_max": 1.5,
+        "v_max": v_max,
         "a_max": 2.0,
         "kv": 2.0,
         "qp_max_iters": qp_max_iters,
@@ -136,7 +136,11 @@ def main() -> int:
                     spec=spec,
                     env=MultiUAVEnv(spec["scenario"]),
                     seed=seed,
-                    ra=make_controller(condition, qp_max_iters=args.qp_max_iters),
+                    ra=make_controller(
+                        condition,
+                        qp_max_iters=args.qp_max_iters,
+                        v_max=spec["scenario"].speed_limit,
+                    ),
                     mode="CBF_ONLY",
                     llm_client=None,
                     llm_fallback=None,

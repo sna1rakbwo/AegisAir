@@ -30,6 +30,9 @@ class Phase5CommandEncodingTest(unittest.TestCase):
         self.assertEqual(_priority_order([2, 3, 4, 5], urgent_drone=4), [4, 2, 3, 5])
         self.assertEqual(_priority_order([2, 3, 4, 5]), [2, 3, 4, 5])
 
+    def test_high_closing_scenario_has_higher_speed_limit(self) -> None:
+        self.assertEqual(_scenario("high_closing")["scenario"].speed_limit, 2.0)
+
     def test_build_phase5_command_integrates_safe_velocity(self) -> None:
         command = build_phase5_command(
             drone=2,
