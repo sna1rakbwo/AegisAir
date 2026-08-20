@@ -251,6 +251,10 @@ def main() -> int:
                     # timeout before its asynchronous future can be polled.
                     real_time=(condition == "R2"),
                     execution_tau_s=0.2,
+                    # R1 is the synchronous deterministic baseline.  R2 is
+                    # asynchronous by design and therefore activates its
+                    # validated contingency while the local model runs.
+                    replan_blocking=(condition == "R1"),
                 )
                 rows.append(row(scenario, condition, seed, run))
 
