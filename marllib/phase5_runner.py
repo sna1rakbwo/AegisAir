@@ -631,6 +631,7 @@ def run_sim_episode(
     high_reached_step = None
     cbf_events = 0
     min_rho = float("inf")
+    min_pairwise_distance_m = float("inf")
     control_effort_sum = 0.0
     control_effort_n = 0
     emitted_commands = 0
@@ -816,6 +817,16 @@ def run_sim_episode(
         final = {i: np.asarray(results[i].safe_action) for i in env.agent_ids}
         _, _, terminated, _, infos = env.step(final)
 
+        if len(env.agent_ids) > 1:
+            positions = env.positions
+            distances = np.linalg.norm(
+                positions[:, None, :] - positions[None, :, :], axis=-1
+            )
+            np.fill_diagonal(distances, np.inf)
+            min_pairwise_distance_m = min(
+                min_pairwise_distance_m, float(np.min(distances))
+            )
+
         if critical_goal is not None:
             for i in env.agent_ids:
                 if i in failed or i in aborted:
@@ -858,6 +869,11 @@ def run_sim_episode(
         "completion_steps": completion_step,
         "cbf_events": cbf_events,
         "min_rho": round(min_rho, 6) if min_rho != float("inf") else None,
+        "min_pairwise_distance_m": (
+            round(min_pairwise_distance_m, 6)
+            if min_pairwise_distance_m != float("inf")
+            else None
+        ),
         "control_effort": (
             round(control_effort_sum / control_effort_n, 4)
             if control_effort_n

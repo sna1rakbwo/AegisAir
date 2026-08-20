@@ -183,6 +183,7 @@ class Phase6FaultInjectionTest(unittest.TestCase):
     def test_estimator_dropout_runs_through_ra(self) -> None:
         run = self._run({"estimator_dropout_rate": 0.3})
         self.assertIn("min_rho", run)
+        self.assertIsNotNone(run["min_pairwise_distance_m"])
         self.assertGreater(run["emitted_commands"], 0)
 
 

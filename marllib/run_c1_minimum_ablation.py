@@ -109,6 +109,14 @@ def summarize(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "collision_rate": float(np.mean([row["collision"] for row in group])),
                 "boundary_violation_rate": float(np.mean([row["min_rho"] < 0.0 for row in group])),
                 "completion_rate": float(np.mean([row["completed"] for row in group])),
+                "min_pairwise_distance_m": float(np.min([
+                    row["min_pairwise_distance_m"] for row in group
+                    if row["min_pairwise_distance_m"] is not None
+                ])),
+                "mean_min_pairwise_distance_m": float(np.mean([
+                    row["min_pairwise_distance_m"] for row in group
+                    if row["min_pairwise_distance_m"] is not None
+                ])),
                 "min_rho": float(np.min([row["min_rho"] for row in group])),
                 "mean_min_rho": float(np.mean([row["min_rho"] for row in group])),
                 "mean_cbf_events": float(np.mean([row["cbf_events"] for row in group])),
