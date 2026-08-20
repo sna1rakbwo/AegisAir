@@ -69,6 +69,7 @@ class RuntimeAssurance:
         tau_px4: float = 0.0,
         tau_px4_min: float | None = None,
         tau_px4_max: float | None = None,
+        qp_max_iters: int = 3000,
     ) -> None:
         self.params = params or RuntimeAssuranceParams()
         self.v_max = v_max
@@ -84,6 +85,9 @@ class RuntimeAssurance:
         self.tau_px4 = tau_px4
         self.tau_px4_min = tau_px4_min if tau_px4_min is not None else tau_px4
         self.tau_px4_max = tau_px4_max if tau_px4_max is not None else tau_px4
+        if qp_max_iters < 1:
+            raise ValueError("qp_max_iters must be positive")
+        self.qp_max_iters = qp_max_iters
         self.trackers: dict[tuple[int, int], PairMarginTracker] = {}
         self.monitor = PredictiveMonitor(q_pred=self.params.q_pred)
         self._last_t: float | None = None
@@ -242,11 +246,6 @@ class RuntimeAssurance:
         if self._last_t is not None:
             dt = max(1e-3, t - self._last_t)
         self._last_t = t
-        alpha = (
-            1.0 - float(np.exp(-dt / self.tau_px4))
-            if self.tau_px4 > 0
-            else 1.0
-        )
         for agent_id, snapshot in snapshots.items():
             if snapshot.velocity is not None:
                 self.monitor.update_acceleration(agent_id, snapshot.velocity, dt)
@@ -302,14 +301,38 @@ class RuntimeAssurance:
                     v_cl_now, pair_aoi, sigma_i, sigma_j, self.params
                 )
 
-                v_pred_i = velocities[i] + alpha * a_nom[i] * dt
-                v_pred_j = velocities[j] + alpha * a_nom[j] * dt
-                v_cl_next = _closing_speed_2d(
-                    positions[i], positions[j], v_pred_i, v_pred_j
+                # The execution interval changes both the position coefficient
+                # beta and the next-sample closing speed.  Use the worst next
+                # safety boundary over the four tau rectangle vertices; the
+                # QP then remains affine in beta while retaining a robust
+                # scalar D_next for every vertex constraint.
+                next_boundaries = []
+                tau_vertices = (
+                    (self.tau_px4_min, self.tau_px4_min),
+                    (self.tau_px4_min, self.tau_px4_max),
+                    (self.tau_px4_max, self.tau_px4_min),
+                    (self.tau_px4_max, self.tau_px4_max),
                 )
-                s_next[(i, j)] = _d_safe_2d(
-                    v_cl_next, pair_aoi, sigma_i, sigma_j, self.params
-                )
+                for tau_i, tau_j in tau_vertices:
+                    alpha_i = (
+                        1.0 - float(np.exp(-dt / tau_i))
+                        if tau_i > 0 else 1.0
+                    )
+                    alpha_j = (
+                        1.0 - float(np.exp(-dt / tau_j))
+                        if tau_j > 0 else 1.0
+                    )
+                    v_pred_i = velocities[i] + alpha_i * a_nom[i] * dt
+                    v_pred_j = velocities[j] + alpha_j * a_nom[j] * dt
+                    v_cl_next = _closing_speed_2d(
+                        positions[i], positions[j], v_pred_i, v_pred_j
+                    )
+                    next_boundaries.append(
+                        _d_safe_2d(
+                            v_cl_next, pair_aoi, sigma_i, sigma_j, self.params
+                        )
+                    )
+                s_next[(i, j)] = max(next_boundaries)
 
                 distance = float(np.linalg.norm(positions[i] - positions[j]))
                 rho = normalized_margin(distance, s_now[(i, j)])
@@ -342,6 +365,7 @@ class RuntimeAssurance:
             gamma=self.gamma,
             a_max=self.a_max,
             beta=beta,
+            max_iters=self.qp_max_iters,
         )
         self.qp_solve_count += 1
         if not feasible:

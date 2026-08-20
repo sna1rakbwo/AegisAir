@@ -63,6 +63,8 @@ def main() -> int:
     parser.add_argument("--urgent-drone", type=int, default=2)
     parser.add_argument("--aoi-ms", type=float, default=0.0)
     parser.add_argument("--tau-px4", type=float, default=0.0)
+    parser.add_argument("--tau-px4-min", type=float, default=None)
+    parser.add_argument("--tau-px4-max", type=float, default=None)
     args = parser.parse_args()
 
     spec = _scenario("multi_uav")
@@ -84,6 +86,8 @@ def main() -> int:
         sampled_data=True,
         gamma=args.gamma,
         tau_px4=args.tau_px4,
+        tau_px4_min=args.tau_px4_min,
+        tau_px4_max=args.tau_px4_max,
     )
     sigma = ra.perception_sigma
 

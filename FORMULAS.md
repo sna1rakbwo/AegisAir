@@ -81,7 +81,9 @@ constraint:
 ```
 
 因为对 `a` 线性、对 `β` affine，`(β_i, β_j)` rectangle 的 **4 个顶点**全部进
-QP，即可保证整个 τ interval 的安全（每 pair 4 条约束，4 机 6 pair = 24 条）。
+QP。`D_next` 同时取四个 τ 顶点对应的 `d_safe(v_next)` 最大值，避免只对位置
+系数 robustify、却仍用 nominal execution 计算下一拍 closing-speed boundary。
+因此当前实现对 projected barrier 使用每 pair 4 条约束，4 机 6 pair = 24 条。
 QP 输出 `a_safe`；不可行时硬刹车 `a_safe = clip(-v, -a_max, a_max)`。
 速度命令：`v_safe = clip(v + a_safe·Δt, -v_max, v_max)`。
 
