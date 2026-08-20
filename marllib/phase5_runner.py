@@ -498,7 +498,15 @@ def _local_ra_view(
     view[observer] = _fresh_local_state(fresh_states[observer], now_ms)
     aoi = {
         (observer, peer): max(
-            0.0, (now_ms - peer_states[peer].timestamp_ms) / 1000.0
+            0.0,
+            (
+                now_ms
+                - (
+                    now_ms
+                    if isinstance(peer_states[peer], DroneSnapshot)
+                    else int(getattr(peer_states[peer], "timestamp_ms", now_ms))
+                )
+            ) / 1000.0,
         )
         for peer in peer_states
         if peer != observer

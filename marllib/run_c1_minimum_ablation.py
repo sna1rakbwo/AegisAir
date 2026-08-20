@@ -22,7 +22,12 @@ if str(ROOT) not in sys.path:
 
 from marllib.config import randomized
 from marllib.envs.multi_uav import MultiUAVEnv
-from marllib.phase5_runner import _scenario, run_sim_episode
+from marllib.phase5_runner import (
+    OBSERVATION_LEGACY_ASYMMETRIC,
+    OBSERVATION_MODES,
+    _scenario,
+    run_sim_episode,
+)
 from swarm.ra.margins import RuntimeAssuranceParams
 from swarm.ra.runtime_assurance import RuntimeAssurance
 
@@ -134,6 +139,11 @@ def main() -> int:
     parser.add_argument("--seeds", default=",".join(str(seed) for seed in range(201, 251)))
     parser.add_argument("--max-steps", type=int, default=200)
     parser.add_argument("--qp-max-iters", type=int, default=300)
+    parser.add_argument(
+        "--observation-mode",
+        choices=sorted(OBSERVATION_MODES),
+        default=OBSERVATION_LEGACY_ASYMMETRIC,
+    )
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
     seeds = [int(seed) for seed in args.seeds.split(",") if seed]
@@ -162,17 +172,23 @@ def main() -> int:
                     max_steps=args.max_steps,
                     real_time=False,
                     fault=scenario_config["fault"],
+                    observation_mode=args.observation_mode,
                 )
                 rows.append({"scenario": scenario_name, "seed": seed, "ablation": ablation, **run})
 
     payload = {
         "config": {
-            "protocol": "aegisair-minimum-c1-v1",
+            "protocol": (
+                "aegisair-minimum-c1-v2-observation-consistent"
+                if args.observation_mode != OBSERVATION_LEGACY_ASYMMETRIC
+                else "aegisair-minimum-c1-v1"
+            ),
             "seeds": seeds,
             "ablations": list(ABLATIONS),
             "scenarios": SCENARIOS,
             "max_steps": args.max_steps,
             "qp_max_iters": args.qp_max_iters,
+            "observation_mode": args.observation_mode,
         },
         "summary": summarize(rows),
         "episodes": rows,

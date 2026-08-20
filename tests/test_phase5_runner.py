@@ -268,6 +268,16 @@ class EstimatorWiringTest(unittest.TestCase):
         self.assertEqual(view[1].timestamp_ms, 700)
         self.assertAlmostEqual(aoi[(0, 1)], 0.3)
 
+    def test_local_ra_view_treats_raw_peer_as_current(self) -> None:
+        raw = {
+            0: DroneSnapshot(0, (0.0, 0.0, 0.0), velocity=(0.0, 0.0, 0.0)),
+            1: DroneSnapshot(1, (1.0, 0.0, 0.0), velocity=(0.0, 0.0, 0.0)),
+        }
+        _, aoi = _local_ra_view(
+            observer=0, fresh_states=raw, peer_states=raw, now_ms=5000
+        )
+        self.assertEqual(aoi[(0, 1)], 0.0)
+
     def test_nominal_can_use_observed_state(self) -> None:
         spec = _scenario("head_on")
         env = MultiUAVEnv(spec["scenario"])

@@ -9,6 +9,7 @@ from marllib.run_c1_minimum_ablation import (
     params_for,
     scenario_spec,
 )
+from marllib.phase5_runner import OBSERVATION_LOCAL_FRESH_SELF
 
 
 class C1MinimumAblationTest(unittest.TestCase):
@@ -36,6 +37,12 @@ class C1MinimumAblationTest(unittest.TestCase):
     def test_make_controller_has_zero_default_perception_sigma(self) -> None:
         ra = make_controller("full_envelope", qp_max_iters=10, speed_limit=1.5)
         self.assertEqual(ra.perception_sigma, 0.0)
+
+    def test_local_fresh_self_mode_is_available_for_v5(self) -> None:
+        self.assertEqual(
+            OBSERVATION_LOCAL_FRESH_SELF,
+            "local_fresh_self_stale_peers",
+        )
 
 
 if __name__ == "__main__":

@@ -1,0 +1,8 @@
+{
+  "protocol": "aegisair-minimum-c1-v2-observation-consistent",
+  "supersedes": "aegisair-minimum-c1-v1 only for the new observation-consistent rerun",
+  "seeds": [201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250],
+  "observation_mode": "local_fresh_self_stale_peers",
+  "delay_ms": 300,
+  "rule": "本机状态保持新鲜；peer状态通过延迟估计器和AoI进入各自RA；v4原始结果保留。"
+}
