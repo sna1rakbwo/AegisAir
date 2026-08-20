@@ -10,10 +10,8 @@ The trigger is a Mission Validity Monitor:
 
     E_replan = E_safety OR E_mission OR E_coord
 
-The LLM request is submitted on a background thread.  A validated deterministic
-contingency is committed immediately so an invalidated mission never waits on
-model latency; an LLM plan may refine that contingency only after it is ready
-and validated.  The CBF filter still sees every action.
+The LLM request is submitted on a background thread and committed only after it
+is ready and validated; the CBF filter still sees every action.
 """
 
 from __future__ import annotations
@@ -98,7 +96,6 @@ class _PendingReplan:
     future: Future
     context: RecoveryContext
     request_id: int
-    fallback_committed: bool = False
 
 
 class AsyncMissionReplanner:
@@ -307,17 +304,6 @@ class AsyncMissionReplanner:
         if self.blocking:
             self._wait_and_commit(pending, t, base_goals)
         else:
-            # Mission recovery is not allowed to wait for an untrusted, slow
-            # System-2 response.  The deterministic plan is already
-            # interface-validated and is the safe operational contingency.
-            self._commit(
-                self.fallback.generate(context).plan,
-                pending,
-                t,
-                base_goals,
-                source="fallback",
-            )
-            pending.fallback_committed = True
             self._pending = pending
 
     def _poll_pending(self, t: float, base_goals: dict[int, Vector3]) -> None:
@@ -326,24 +312,20 @@ class AsyncMissionReplanner:
         pending = self._pending
         if t - pending.submitted_at > self.config.replan_timeout_s:
             self.counters.llm_timeouts += 1
-            if not pending.fallback_committed:
-                self._commit(
-                    self.fallback.generate(pending.context).plan,
-                    pending,
-                    t,
-                    base_goals,
-                    source="fallback",
-                )
+            self._commit(
+                self.fallback.generate(pending.context).plan,
+                pending,
+                t,
+                base_goals,
+                source="fallback",
+            )
             self._pending = None
             return
         if not pending.future.done():
             return
         result = pending.future.result()
         plan, source = self._plan_from_llm(result, pending.context)
-        # A rejected, malformed, or stale answer must not re-apply the
-        # contingency.  A timely validated LLM answer may still refine it.
-        if source == "llm" or not pending.fallback_committed:
-            self._commit(plan, pending, t, base_goals, source=source)
+        self._commit(plan, pending, t, base_goals, source=source)
         self._pending = None
 
     def _wait_and_commit(

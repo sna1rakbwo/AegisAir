@@ -651,14 +651,12 @@ def _make_replanner(
     fallback,
     dt: float,
     config: ReplanConfig | None = None,
-    blocking: bool = False,
 ) -> AsyncMissionReplanner:
     return AsyncMissionReplanner(
         client=client,
         fallback=fallback,
         config=config or ReplanConfig(),
         dt=dt,
-        blocking=blocking,
     )
 
 
@@ -818,7 +816,6 @@ def run_sim_episode(
     execution_tau_s: float = 0.0,
     execution_audit_samples: int = 0,
     replan_timeout_s: float | None = None,
-    replan_blocking: bool = False,
     pilot: MappoPilot | None = None,
 ) -> dict[str, Any]:
     if observation_mode not in OBSERVATION_MODES:
@@ -852,7 +849,6 @@ def run_sim_episode(
             fallback=llm_fallback,
             dt=env.scenario.dt,
             config=replan_config,
-            blocking=replan_blocking,
         )
         if mode == "ASYNC"
         else None

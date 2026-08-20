@@ -86,7 +86,7 @@ class AsyncMissionReplannerTest(unittest.TestCase):
             mission_change=mission_change,
         )
 
-    def test_route_deviation_commits_contingency_before_async_response(self) -> None:
+    def test_route_deviation_triggers_and_commits_async(self) -> None:
         replanner = AsyncMissionReplanner(
             client=DeterministicRecoveryClient(),
             config=ReplanConfig(route_deviation_threshold_m=1.5),
@@ -95,14 +95,12 @@ class AsyncMissionReplannerTest(unittest.TestCase):
         self._step(replanner, 0.1, [(2.0, 3.0, 0.0)])
         self.assertEqual(replanner.counters.triggers, 1)
         self.assertEqual(replanner.counters.trigger_causes, ["ROUTE_DEVIATION"])
-        # A validated deterministic contingency is active immediately; the
-        # asynchronous model may only refine it after validation.
-        self.assertEqual(replanner.counters.plans_committed, 1)
-        self.assertEqual(replanner.counters.fallback_plans_committed, 1)
+        # Async: generation is submitted but not committed in the same step.
+        self.assertEqual(replanner.counters.plans_committed, 0)
 
         self._step(replanner, 0.2, [(2.0, 3.0, 0.0)])
-        self.assertGreaterEqual(replanner.counters.plans_committed, 1)
-        self.assertGreaterEqual(replanner.counters.mission_changes, 1)
+        self.assertEqual(replanner.counters.plans_committed, 1)
+        self.assertEqual(replanner.counters.mission_changes, 1)
         replanner.shutdown()
 
     def test_stall_triggers_coordination_degradation(self) -> None:
@@ -146,7 +144,6 @@ class AsyncMissionReplannerTest(unittest.TestCase):
         )
         self._step(replanner, 0.0, [(0.0, 0.0, 0.0)], mission_change={"drone": 0})
         self.assertEqual(replanner.counters.triggers, 1)
-        self.assertEqual(replanner.counters.fallback_plans_committed, 1)
         self._step(replanner, 0.1, [(0.0, 0.0, 0.0)])
         self.assertEqual(replanner.counters.llm_timeouts, 1)
         self.assertEqual(replanner.counters.plans_committed, 1)
