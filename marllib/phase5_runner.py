@@ -44,7 +44,8 @@ from swarm.estimation import (
     SharedStateEstimator,
     SharedStateEstimatorConfig,
 )
-from swarm.ra.margins import RuntimeAssuranceParams
+from swarm.ra.margin import normalized_margin
+from swarm.ra.margins import RuntimeAssuranceParams, dynamic_safety_boundary
 from swarm.ra.runtime_assurance import RuntimeAssurance
 from swarm.recovery import (
     AsyncMissionReplanner,
@@ -659,6 +660,138 @@ def _make_replanner(
     )
 
 
+def _step_exact_zoh_execution(
+    env: MultiUAVEnv,
+    commands: dict[int, np.ndarray],
+    tau_s: float,
+) -> dict[int, dict[str, bool]]:
+    """Advance the lightweight plant with exact first-order command tracking.
+
+    This is intentionally opt-in for C2 execution-model ablations.  The
+    default simulator retains its original instantaneous velocity-command
+    transition, while C2 evaluates all controllers against this same lagged
+    plant rather than accidentally evaluating them on ideal execution.
+    """
+    dt = env.scenario.dt
+    alpha = 1.0 - float(np.exp(-dt / tau_s))
+    beta = dt - tau_s * alpha
+    for idx, agent_id in enumerate(env.agent_ids):
+        velocity = env.velocities[idx].copy()
+        command = np.clip(
+            np.asarray(commands[agent_id], dtype=np.float64),
+            -env.scenario.speed_limit,
+            env.scenario.speed_limit,
+        )
+        requested_delta = alpha * (command - velocity)
+        realized_delta = np.clip(
+            requested_delta,
+            -env.scenario.accel_limit * dt,
+            env.scenario.accel_limit * dt,
+        )
+        env.positions[idx] = env.positions[idx] + velocity * dt + beta * (
+            realized_delta / alpha
+        )
+        env.velocities[idx] = velocity + realized_delta
+    arena = env.scenario.arena
+    env.positions = np.clip(env.positions, (arena[0], arena[2]), (arena[1], arena[3]))
+    distances = np.linalg.norm(
+        env.positions[:, None, :] - env.positions[None, :, :], axis=-1
+    )
+    np.fill_diagonal(distances, np.inf)
+    collisions = (distances < env.scenario.collision_radius).any(axis=1)
+    env.step_count += 1
+    return {
+        agent_id: {"collided": bool(collisions[idx])}
+        for idx, agent_id in enumerate(env.agent_ids)
+    }
+
+
+def _audit_exact_zoh_interval(
+    env: MultiUAVEnv,
+    commands: dict[int, np.ndarray],
+    tau_s: float,
+    ra: RuntimeAssurance,
+    samples: int,
+) -> dict[str, Any]:
+    """Reconstruct one exact-ZOH control interval for the C2 dense audit."""
+    if samples < 1:
+        raise ValueError("samples must be positive")
+    dt = env.scenario.dt
+    alpha_dt = 1.0 - float(np.exp(-dt / tau_s))
+    start_positions = env.positions.copy()
+    start_velocities = env.velocities.copy()
+    effective_commands: dict[int, np.ndarray] = {}
+    for idx, agent_id in enumerate(env.agent_ids):
+        command = np.clip(
+            np.asarray(commands[agent_id], dtype=np.float64),
+            -env.scenario.speed_limit,
+            env.scenario.speed_limit,
+        )
+        requested_delta = alpha_dt * (command - start_velocities[idx])
+        realized_delta = np.clip(
+            requested_delta,
+            -env.scenario.accel_limit * dt,
+            env.scenario.accel_limit * dt,
+        )
+        effective_commands[agent_id] = start_velocities[idx] + realized_delta / alpha_dt
+
+    min_distance = float("inf")
+    min_rho = float("inf")
+    min_projected = float("inf")
+    min_squared = float("inf")
+    endpoint_rho = float("inf")
+    endpoint_distance = float("inf")
+    for t in np.linspace(0.0, dt, samples + 1):
+        alpha_t = 1.0 - float(np.exp(-t / tau_s))
+        beta_t = t - tau_s * alpha_t
+        positions = start_positions.copy()
+        velocities = start_velocities.copy()
+        for idx, agent_id in enumerate(env.agent_ids):
+            delta_u = effective_commands[agent_id] - start_velocities[idx]
+            positions[idx] += start_velocities[idx] * t + beta_t * delta_u
+            velocities[idx] += alpha_t * delta_u
+        for first in range(len(env.agent_ids)):
+            for second in range(first + 1, len(env.agent_ids)):
+                delta = positions[first] - positions[second]
+                distance = float(np.linalg.norm(delta))
+                direction = delta / distance if distance > 1e-9 else np.array([1.0, 0.0])
+                relative_velocity = velocities[first] - velocities[second]
+                closing = (
+                    max(0.0, -float(np.dot(delta, relative_velocity)) / distance)
+                    if distance > 1e-9
+                    else 0.0
+                )
+                d_safe = dynamic_safety_boundary(
+                    closing_speed=closing,
+                    perception_sigma_i=ra.perception_sigma,
+                    perception_sigma_j=ra.perception_sigma,
+                    aoi=0.0,
+                    params=ra.params,
+                )
+                rho = normalized_margin(distance, d_safe)
+                projected = float(np.dot(direction, delta)) - d_safe
+                squared = distance * distance - d_safe * d_safe
+                min_distance = min(min_distance, distance)
+                min_rho = min(min_rho, rho)
+                min_projected = min(min_projected, projected)
+                min_squared = min(min_squared, squared)
+                if np.isclose(t, dt):
+                    endpoint_rho = min(endpoint_rho, rho)
+                    endpoint_distance = min(endpoint_distance, distance)
+    return {
+        "start_positions": start_positions.tolist(),
+        "start_velocities": start_velocities.tolist(),
+        "commands": {str(i): np.asarray(commands[i]).tolist() for i in env.agent_ids},
+        "effective_commands": {str(i): effective_commands[i].tolist() for i in env.agent_ids},
+        "endpoint_min_distance_m": endpoint_distance,
+        "endpoint_min_rho": endpoint_rho,
+        "intersample_min_distance_m": min_distance,
+        "intersample_min_rho": min_rho,
+        "intersample_min_projected_barrier": min_projected,
+        "intersample_min_squared_barrier": min_squared,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Deterministic local closed-loop gate.
 # ---------------------------------------------------------------------------
@@ -680,11 +813,17 @@ def run_sim_episode(
     urgent_drone: int | None = None,
     fault: dict[str, Any] | None = None,
     observation_mode: str = OBSERVATION_LEGACY_ASYMMETRIC,
+    execution_tau_s: float = 0.0,
+    execution_audit_samples: int = 0,
     replan_timeout_s: float | None = None,
     pilot: MappoPilot | None = None,
 ) -> dict[str, Any]:
     if observation_mode not in OBSERVATION_MODES:
         raise ValueError(f"unknown observation_mode: {observation_mode}")
+    if execution_tau_s < 0.0:
+        raise ValueError("execution_tau_s must be non-negative")
+    if execution_audit_samples and execution_tau_s <= 0.0:
+        raise ValueError("exact-ZOH audit requires execution_tau_s > 0")
     if observation_mode == OBSERVATION_LOCAL_FRESH_SELF and pilot is not None:
         raise ValueError("local fresh-self observation is not defined for a centralized pilot")
     env.reset(seed=seed)
@@ -742,6 +881,10 @@ def run_sim_episode(
     emitted_commands = 0
     rejected_commands = 0
     rejected_reasons: dict[str, int] = {}
+    qp_solve_steps = 0
+    qp_infeasible_steps = 0
+    qp_latency_ms: list[float] = []
+    intersample_records: list[dict[str, Any]] = []
     seq_state = {
         "active": False,
         "order": _priority_order(env.agent_ids, urgent_drone),
@@ -874,7 +1017,13 @@ def run_sim_episode(
                 nominal[i] = nominal[i] + rng.normal(0.0, nominal_noise, 2)
 
         if local_ras is None:
+            filter_started = time.perf_counter()
             results = ra.filter(snapshots, nominal, t=t, aoi=aoi)
+            filter_elapsed_ms = (time.perf_counter() - filter_started) * 1000.0
+            if ra.last_qp_feasible is not None:
+                qp_solve_steps += 1
+                qp_infeasible_steps += int(not ra.last_qp_feasible)
+                qp_latency_ms.append(filter_elapsed_ms)
         else:
             now_ms = int(t * 1000)
             results = {}
@@ -885,9 +1034,15 @@ def run_sim_episode(
                     peer_states=snapshots,
                     now_ms=now_ms,
                 )
+                filter_started = time.perf_counter()
                 results[i] = local_ras[i].filter(
                     local_view, nominal, t=t, aoi=local_aoi
                 )[i]
+                filter_elapsed_ms = (time.perf_counter() - filter_started) * 1000.0
+                if local_ras[i].last_qp_feasible is not None:
+                    qp_solve_steps += 1
+                    qp_infeasible_steps += int(not local_ras[i].last_qp_feasible)
+                    qp_latency_ms.append(filter_elapsed_ms)
         cbf_events += sum(1 for r in results.values() if r.intervened)
         min_rho = min(min_rho, min(r.safety_margin for r in results.values()))
         for i in env.agent_ids:
@@ -951,7 +1106,16 @@ def run_sim_episode(
                 rejected_reasons[reason] = rejected_reasons.get(reason, 0) + 1
 
         final = {i: np.asarray(results[i].safe_action) for i in env.agent_ids}
-        _, _, terminated, _, infos = env.step(final)
+        if execution_tau_s > 0.0:
+            if execution_audit_samples:
+                audit = _audit_exact_zoh_interval(
+                    env, final, execution_tau_s, ra, execution_audit_samples
+                )
+                audit["step"] = step
+                intersample_records.append(audit)
+            infos = _step_exact_zoh_execution(env, final, execution_tau_s)
+        else:
+            _, _, _, _, infos = env.step(final)
 
         if len(env.agent_ids) > 1:
             positions = env.positions
@@ -1022,6 +1186,11 @@ def run_sim_episode(
         "emitted_commands": emitted_commands,
         "rejected_commands": rejected_commands,
         "rejected_reasons": rejected_reasons,
+        "qp_solve_steps": qp_solve_steps,
+        "qp_infeasible_steps": qp_infeasible_steps,
+        "qp_latency_ms": qp_latency_ms,
+        "intersample_audit_samples": execution_audit_samples,
+        "intersample_records": intersample_records if execution_audit_samples else None,
         "counters": (
             {
                 "triggers": replanner.counters.triggers,

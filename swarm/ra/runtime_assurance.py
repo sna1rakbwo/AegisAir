@@ -11,6 +11,7 @@ from swarm.ra.hocbf import (
     beta_of_tau,
     solve_acceleration_qp,
     solve_robust_sampled_data_qp,
+    solve_sampled_data_qp,
 )
 from swarm.ra.margin import PairMarginTracker, normalized_margin
 from swarm.ra.margins import (
@@ -69,6 +70,7 @@ class RuntimeAssurance:
         tau_px4: float = 0.0,
         tau_px4_min: float | None = None,
         tau_px4_max: float | None = None,
+        execution_model: str = "exact_zoh",
         qp_max_iters: int = 3000,
     ) -> None:
         self.params = params or RuntimeAssuranceParams()
@@ -85,6 +87,9 @@ class RuntimeAssurance:
         self.tau_px4 = tau_px4
         self.tau_px4_min = tau_px4_min if tau_px4_min is not None else tau_px4
         self.tau_px4_max = tau_px4_max if tau_px4_max is not None else tau_px4
+        if execution_model not in {"exact_zoh", "legacy_trapezoidal"}:
+            raise ValueError("unknown execution_model")
+        self.execution_model = execution_model
         if qp_max_iters < 1:
             raise ValueError("qp_max_iters must be positive")
         self.qp_max_iters = qp_max_iters
@@ -355,18 +360,37 @@ class RuntimeAssurance:
                 pair_deg[(i, j)] = degradation
                 pair_pred[(i, j)] = pred
 
-        a_safe, feasible, _ = solve_robust_sampled_data_qp(
-            a_nom=a_nom,
-            positions=positions,
-            velocities=velocities,
-            s_now=s_now,
-            s_next=s_next,
-            dt=dt,
-            gamma=self.gamma,
-            a_max=self.a_max,
-            beta=beta,
-            max_iters=self.qp_max_iters,
-        )
+        if self.execution_model == "legacy_trapezoidal":
+            alpha = (
+                1.0 - float(np.exp(-dt / self.tau_px4))
+                if self.tau_px4 > 0.0
+                else 1.0
+            )
+            a_safe, feasible, _ = solve_sampled_data_qp(
+                a_nom=a_nom,
+                positions=positions,
+                velocities=velocities,
+                s_now=s_now,
+                s_next=s_next,
+                dt=dt,
+                gamma=self.gamma,
+                a_max=self.a_max,
+                alpha=alpha,
+                max_iters=self.qp_max_iters,
+            )
+        else:
+            a_safe, feasible, _ = solve_robust_sampled_data_qp(
+                a_nom=a_nom,
+                positions=positions,
+                velocities=velocities,
+                s_now=s_now,
+                s_next=s_next,
+                dt=dt,
+                gamma=self.gamma,
+                a_max=self.a_max,
+                beta=beta,
+                max_iters=self.qp_max_iters,
+            )
         self.qp_solve_count += 1
         if not feasible:
             self.qp_infeasible_count += 1

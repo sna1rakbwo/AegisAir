@@ -10,7 +10,9 @@ from marllib.envs.multi_uav import MultiUAVEnv
 from marllib.phase5_runner import (
     CRUISE_ALTITUDE_M,
     OBSERVATION_LOCAL_FRESH_SELF,
+    _audit_exact_zoh_interval,
     _priority_order,
+    _step_exact_zoh_execution,
     _go_to_goal,
     _local_ra_view,
     _propagate_states,
@@ -40,6 +42,40 @@ class Phase5CommandEncodingTest(unittest.TestCase):
 
     def test_high_closing_scenario_has_higher_speed_limit(self) -> None:
         self.assertEqual(_scenario("high_closing")["scenario"].speed_limit, 2.0)
+
+    def test_exact_zoh_execution_uses_integrated_position(self) -> None:
+        spec = _scenario("head_on")
+        env = MultiUAVEnv(spec["scenario"])
+        env.reset(seed=1)
+        env.positions[:] = 0.0
+        env.velocities[:] = 0.0
+        _step_exact_zoh_execution(
+            env,
+            {0: np.array([0.5, 0.0]), 1: np.array([-0.5, 0.0])},
+            tau_s=0.2,
+        )
+        alpha = 1.0 - np.exp(-env.scenario.dt / 0.2)
+        beta = env.scenario.dt - 0.2 * alpha
+        self.assertAlmostEqual(float(env.velocities[0, 0]), 0.5 * alpha)
+        self.assertAlmostEqual(float(env.positions[0, 0]), 0.5 * beta)
+
+    def test_exact_zoh_audit_matches_endpoint_propagation(self) -> None:
+        spec = _scenario("head_on")
+        env = MultiUAVEnv(spec["scenario"])
+        env.reset(seed=1)
+        env.positions[:] = 0.0
+        env.velocities[:] = 0.0
+        commands = {0: np.array([0.5, 0.0]), 1: np.array([-0.5, 0.0])}
+        ra = RuntimeAssurance(params=RuntimeAssuranceParams(tau_ctrl=0.0))
+        audit = _audit_exact_zoh_interval(env, commands, 0.2, ra, samples=100)
+        _step_exact_zoh_execution(env, commands, tau_s=0.2)
+        self.assertAlmostEqual(
+            audit["endpoint_min_distance_m"],
+            float(np.linalg.norm(env.positions[0] - env.positions[1])),
+        )
+        self.assertLessEqual(
+            audit["intersample_min_distance_m"], audit["endpoint_min_distance_m"]
+        )
 
     def test_build_phase5_command_integrates_safe_velocity(self) -> None:
         command = build_phase5_command(
