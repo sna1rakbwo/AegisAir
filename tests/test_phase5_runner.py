@@ -229,6 +229,8 @@ class Phase6FaultInjectionTest(unittest.TestCase):
         self.assertIn("min_rho", run)
         self.assertIsNotNone(run["min_pairwise_distance_m"])
         self.assertGreater(run["emitted_commands"], 0)
+        self.assertIn("path_length_m", run)
+        self.assertIn("max_repeated_cbf_duration_s", run)
 
 
 class EstimatorWiringTest(unittest.TestCase):

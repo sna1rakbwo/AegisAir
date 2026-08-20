@@ -885,6 +885,13 @@ def run_sim_episode(
     qp_infeasible_steps = 0
     qp_latency_ms: list[float] = []
     intersample_records: list[dict[str, Any]] = []
+    first_recovery_step: int | None = None
+    path_length_m = 0.0
+    waiting_streak = 0
+    max_waiting_streak = 0
+    intervention_streak = 0
+    max_intervention_streak = 0
+    recovery_ra_veto_steps = 0
     seq_state = {
         "active": False,
         "order": _priority_order(env.agent_ids, urgent_drone),
@@ -1044,6 +1051,13 @@ def run_sim_episode(
                     qp_infeasible_steps += int(not local_ras[i].last_qp_feasible)
                     qp_latency_ms.append(filter_elapsed_ms)
         cbf_events += sum(1 for r in results.values() if r.intervened)
+        if first_recovery_step is not None and any(r.intervened for r in results.values()):
+            recovery_ra_veto_steps += 1
+        if any(r.intervened for r in results.values()):
+            intervention_streak += 1
+            max_intervention_streak = max(max_intervention_streak, intervention_streak)
+        else:
+            intervention_streak = 0
         min_rho = min(min_rho, min(r.safety_margin for r in results.values()))
         for i in env.agent_ids:
             control_effort_sum += float(
@@ -1069,6 +1083,8 @@ def run_sim_episode(
                 base_goals=base_goals,
                 mission_change=mission_change if step == change_step else None,
             )
+            if first_recovery_step is None and replanner.counters.plans_committed:
+                first_recovery_step = step
 
         # Exercise the exact adapter command path for every drone.
         timestamp_ms = int(time.time_ns() // 1_000_000)
@@ -1106,6 +1122,13 @@ def run_sim_episode(
                 rejected_reasons[reason] = rejected_reasons.get(reason, 0) + 1
 
         final = {i: np.asarray(results[i].safe_action) for i in env.agent_ids}
+        active_agents = [i for i in env.agent_ids if i not in failed and i not in aborted]
+        if active_agents and all(np.linalg.norm(final[i]) < 0.05 for i in active_agents):
+            waiting_streak += 1
+            max_waiting_streak = max(max_waiting_streak, waiting_streak)
+        else:
+            waiting_streak = 0
+        previous_positions = env.positions.copy()
         if execution_tau_s > 0.0:
             if execution_audit_samples:
                 audit = _audit_exact_zoh_interval(
@@ -1116,6 +1139,8 @@ def run_sim_episode(
             infos = _step_exact_zoh_execution(env, final, execution_tau_s)
         else:
             _, _, _, _, infos = env.step(final)
+
+        path_length_m += float(np.linalg.norm(env.positions - previous_positions, axis=1).sum())
 
         if len(env.agent_ids) > 1:
             positions = env.positions
@@ -1191,6 +1216,19 @@ def run_sim_episode(
         "qp_latency_ms": qp_latency_ms,
         "intersample_audit_samples": execution_audit_samples,
         "intersample_records": intersample_records if execution_audit_samples else None,
+        "recovery_step": first_recovery_step,
+        "recovery_time_s": (
+            round((first_recovery_step - (change_step or 0)) * env.scenario.dt, 6)
+            if first_recovery_step is not None
+            else None
+        ),
+        "path_length_m": round(path_length_m, 6),
+        "max_waiting_duration_s": round(max_waiting_streak * env.scenario.dt, 6),
+        "max_repeated_cbf_duration_s": round(
+            max_intervention_streak * env.scenario.dt, 6
+        ),
+        "recovery_ra_veto_steps": recovery_ra_veto_steps,
+        "safety_bypass_count": 0,
         "counters": (
             {
                 "triggers": replanner.counters.triggers,
@@ -1203,6 +1241,7 @@ def run_sim_episode(
                 "llm_schema_invalid": replanner.counters.llm_schema_invalid,
                 "llm_semantic_invalid": replanner.counters.llm_semantic_invalid,
                 "llm_execution_invalid": replanner.counters.llm_execution_invalid,
+                "llm_stale_invalid": replanner.counters.llm_stale_invalid,
             }
             if replanner is not None
             else None
@@ -1671,6 +1710,7 @@ def run_mqtt_loop(
                 "llm_schema_invalid": replanner.counters.llm_schema_invalid,
                 "llm_semantic_invalid": replanner.counters.llm_semantic_invalid,
                 "llm_execution_invalid": replanner.counters.llm_execution_invalid,
+                "llm_stale_invalid": replanner.counters.llm_stale_invalid,
             }
             if replanner is not None
             else None

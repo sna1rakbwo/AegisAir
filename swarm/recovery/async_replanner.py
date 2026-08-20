@@ -77,6 +77,7 @@ class ReplanCounters:
     llm_schema_invalid: int = 0
     llm_semantic_invalid: int = 0
     llm_execution_invalid: int = 0
+    llm_stale_invalid: int = 0
     llm_timeouts: int = 0
     triggers: int = 0
     trigger_causes: list[str] = field(default_factory=list)
@@ -343,9 +344,12 @@ class AsyncMissionReplanner:
             return self.fallback.generate(context).plan, "fallback"
 
         # Deterministic stand-ins emit a full RecoveryPlan; validate directly.
-        full = self.validator.validate(result.raw)
+        full = self.validator.validate(result.raw, now_ms=int(time.time() * 1000))
         if full.valid:
             return full.plan, "llm"
+        if any(error.startswith("expired recovery command") for error in full.errors):
+            self.counters.llm_stale_invalid += 1
+            return self.fallback.generate(context).plan, "fallback"
 
         decision, _ = parse_decision(result.raw)
         if decision is None:
@@ -359,10 +363,15 @@ class AsyncMissionReplanner:
         except ValueError:
             self.counters.llm_semantic_invalid += 1
             return self.fallback.generate(context).plan, "fallback"
-        validation = self.validator.validate(expanded.model_dump(mode="json"))
+        validation = self.validator.validate(
+            expanded.model_dump(mode="json"), now_ms=int(time.time() * 1000)
+        )
         if validation.valid:
             return validation.plan, "llm"
-        self.counters.llm_execution_invalid += 1
+        if any(error.startswith("expired recovery command") for error in validation.errors):
+            self.counters.llm_stale_invalid += 1
+        else:
+            self.counters.llm_execution_invalid += 1
         return self.fallback.generate(context).plan, "fallback"
 
     def _commit(

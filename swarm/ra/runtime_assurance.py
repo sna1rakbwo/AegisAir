@@ -426,9 +426,10 @@ class RuntimeAssurance:
             a_safe_i = np.asarray(a_safe[i], dtype=np.float64)
             accel_saturated = bool(np.linalg.norm(a_safe_i) >= self.a_max - 1e-6)
             vel_saturated = bool(np.linalg.norm(v_safe) >= self.v_max - 1e-6)
-            d_safe_i = min(
+            local_boundaries = [
                 s_now[(ii, jj)] for (ii, jj) in s_now if i == ii or i == jj
-            )
+            ]
+            d_safe_i = min(local_boundaries) if local_boundaries else None
             intervened = bool(np.linalg.norm(a_safe[i] - a_nom[i]) > 1e-6)
             mode = (
                 "override"
@@ -460,7 +461,7 @@ class RuntimeAssurance:
                 proactive=worst_pred_rho < self.params.rho_pred_threshold,
                 a_nom=(float(a_nom_i[0]), float(a_nom_i[1])),
                 a_safe=(float(a_safe_i[0]), float(a_safe_i[1])),
-                d_safe=float(d_safe_i),
+                d_safe=float(d_safe_i) if d_safe_i is not None else None,
                 accel_saturated=accel_saturated,
                 vel_saturated=vel_saturated,
                 feasible=bool(feasible),

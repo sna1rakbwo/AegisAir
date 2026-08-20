@@ -53,7 +53,7 @@ class RecoveryValidator:
         self.min_distance_m = min_distance_m
         self.now_ms = now_ms
 
-    def validate(self, payload: Any) -> ValidationResult:
+    def validate(self, payload: Any, *, now_ms: int | None = None) -> ValidationResult:
         errors: list[str] = []
         if not isinstance(payload, dict):
             return ValidationResult(plan=None, valid=False, errors=["payload must be a JSON object"])
@@ -71,6 +71,8 @@ class RecoveryValidator:
         except ValidationError as exc:
             errors.extend(_flatten_validation_errors(exc))
             return ValidationResult(plan=None, valid=False, errors=errors)
+
+        effective_now_ms = self.now_ms if now_ms is None else now_ms
 
         for command in plan.commands:
             if command.action not in RecoveryAction.__args__:  # type: ignore[attr-defined]
@@ -90,6 +92,8 @@ class RecoveryValidator:
                 errors.append(
                     f"ttl_sec {command.ttl_sec} outside (0, {self.max_ttl_sec}]"
                 )
+            if effective_now_ms > plan.timestamp_ms + int(command.ttl_sec * 1000):
+                errors.append(f"expired recovery command '{command.command_id}'")
 
         if plan.constraints is not None:
             if (

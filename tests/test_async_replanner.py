@@ -12,6 +12,7 @@ from swarm.recovery import (
     LLMRecoveryResult,
     ReplanConfig,
 )
+from swarm.interfaces import RecoveryCommand, RecoveryPlan
 from swarm.safety import DroneSnapshot
 
 
@@ -179,6 +180,34 @@ class AsyncMissionReplannerTest(unittest.TestCase):
         self._step(replanner, 0.0, [(0.0, 0.0, 0.0)], mission_change={"drone": 0})
         self._step(replanner, 0.1, [(0.0, 0.0, 0.0)])
         self.assertEqual(replanner.counters.llm_semantic_invalid, 1)
+        self.assertEqual(replanner.counters.fallback_plans_committed, 1)
+        replanner.shutdown()
+
+    def test_expired_plan_falls_back(self) -> None:
+        expired = RecoveryPlan(
+            schema_version=1,
+            intent_text="expired",
+            commands=[
+                RecoveryCommand(
+                    drone=0,
+                    action="RETURN",
+                    waypoint=None,
+                    priority="normal",
+                    ttl_sec=1.0,
+                    command_id="expired-0",
+                )
+            ],
+            constraints=None,
+            rationale="test",
+            timestamp_ms=1,
+        )
+        replanner = AsyncMissionReplanner(
+            client=_FaultedClient(expired.model_dump(mode="json")),
+            fallback=DeterministicRecoveryClient(),
+        )
+        self._step(replanner, 0.0, [(0.0, 0.0, 0.0)], mission_change={"drone": 0})
+        self._step(replanner, 0.1, [(0.0, 0.0, 0.0)])
+        self.assertEqual(replanner.counters.llm_stale_invalid, 1)
         self.assertEqual(replanner.counters.fallback_plans_committed, 1)
         replanner.shutdown()
 
