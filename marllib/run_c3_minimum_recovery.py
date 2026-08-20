@@ -206,18 +206,32 @@ def main() -> int:
     parser.add_argument("--qwen-model", default="/Users/lijiajun/.cache/aegisair-qwen3-4b-4bit-bench")
     parser.add_argument("--qwen-max-tokens", type=int, default=48)
     parser.add_argument("--skip-r2", action="store_true")
+    parser.add_argument(
+        "--conditions",
+        default=None,
+        help="comma-separated subset of R0,R1,R2; defaults to the full matrix",
+    )
+    parser.add_argument("--skip-faults", action="store_true")
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
-    if args.seeds < 1 or args.fault_seeds < 1:
+    if args.seeds < 1 or (not args.skip_faults and args.fault_seeds < 1):
         parser.error("seed counts must be positive")
     if args.out.exists():
         parser.error(f"refusing to overwrite {args.out}")
 
-    qwen = None if args.skip_r2 else MlxLmClient(
+    if args.conditions is not None:
+        active_conditions = tuple(item.strip() for item in args.conditions.split(",") if item.strip())
+        if not active_conditions or any(item not in CONDITIONS for item in active_conditions):
+            parser.error("--conditions must be a non-empty subset of R0,R1,R2")
+        if args.skip_r2 and "R2" in active_conditions:
+            parser.error("--skip-r2 conflicts with --conditions containing R2")
+    else:
+        active_conditions = ("R0", "R1") if args.skip_r2 else CONDITIONS
+
+    qwen = None if "R2" not in active_conditions else MlxLmClient(
         model_id=args.qwen_model, max_tokens=args.qwen_max_tokens, load=True
     )
     rows: list[dict[str, Any]] = []
-    active_conditions = ("R0", "R1") if args.skip_r2 else CONDITIONS
     for scenario in SCENARIOS:
         spec = _scenario(scenario)
         for condition in active_conditions:
@@ -241,26 +255,29 @@ def main() -> int:
                 rows.append(row(scenario, condition, seed, run))
 
     fault_rows: list[dict[str, Any]] = []
-    spec = _scenario("priority_conflict")
-    for fault in FAULTS:
-        client, timeout = fault_client(fault)
-        for seed in range(1, args.fault_seeds + 1):
-            run = run_sim_episode(
-                spec=spec,
-                env=MultiUAVEnv(spec["scenario"]),
-                seed=seed,
-                ra=make_ra(),
-                mode="ASYNC",
-                llm_client=client,
-                llm_fallback=RuleMissionPlanner(),
-                max_steps=args.max_steps,
-                real_time=False,
-                execution_tau_s=0.2,
-                replan_timeout_s=timeout,
-            )
-            item = row("priority_conflict", "FAULT", seed, run)
-            item["fault"] = fault
-            fault_rows.append(item)
+    if not args.skip_faults:
+        spec = _scenario("priority_conflict")
+        for fault in FAULTS:
+            client, timeout = fault_client(fault)
+            for seed in range(1, args.fault_seeds + 1):
+                run = run_sim_episode(
+                    spec=spec,
+                    env=MultiUAVEnv(spec["scenario"]),
+                    seed=seed,
+                    ra=make_ra(),
+                    mode="ASYNC",
+                    llm_client=client,
+                    llm_fallback=RuleMissionPlanner(),
+                    max_steps=args.max_steps,
+                    real_time=False,
+                    execution_tau_s=0.2,
+                    replan_timeout_s=timeout,
+                )
+                item = row("priority_conflict", "FAULT", seed, run)
+                item["fault"] = fault
+                fault_rows.append(item)
+
+    result_fault_summary = fault_summary(fault_rows) if fault_rows else {"skipped": True, "pass": True}
 
     payload = {
         "protocol_id": PROTOCOL_ID,
@@ -276,7 +293,7 @@ def main() -> int:
         },
         "summary": summarize(rows),
         "episodes": rows,
-        "fault_summary": fault_summary(fault_rows),
+        "fault_summary": result_fault_summary,
         "fault_episodes": fault_rows,
     }
     args.out.parent.mkdir(parents=True, exist_ok=True)
