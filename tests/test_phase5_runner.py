@@ -4,12 +4,18 @@ from __future__ import annotations
 
 import unittest
 
+import numpy as np
+
 from marllib.envs.multi_uav import MultiUAVEnv
 from marllib.phase5_runner import (
     CRUISE_ALTITUDE_M,
+    OBSERVATION_LOCAL_FRESH_SELF,
     _priority_order,
+    _go_to_goal,
+    _local_ra_view,
     _propagate_states,
     _scenario,
+    _snapshots,
     _estimator_config_for_fault,
     _estimated_states_and_aoi,
     build_phase5_command,
@@ -23,6 +29,7 @@ from px4_adapter.mqtt_codec import decode_command, normalize_command_to_ned
 from swarm.estimation import EstimatedState, SharedStateEstimator, SharedStateEstimatorConfig
 from swarm.ra.margins import RuntimeAssuranceParams
 from swarm.ra.runtime_assurance import RuntimeAssurance
+from swarm.recovery import RecoveryOverrides
 from swarm.safety import DroneSnapshot
 
 
@@ -243,6 +250,62 @@ class EstimatorWiringTest(unittest.TestCase):
         )
         self.assertAlmostEqual(cfg.measurement_cov_m2, 0.04)
         self.assertEqual(cfg.dropout_rate, 0.3)
+
+    def test_local_ra_view_keeps_self_fresh_and_peer_stale(self) -> None:
+        fresh = {
+            0: DroneSnapshot(0, (2.0, 0.0, 0.0), (1.0, 0.0, 0.0)),
+            1: DroneSnapshot(1, (4.0, 0.0, 0.0), (1.0, 0.0, 0.0)),
+        }
+        peers = {
+            0: EstimatedState(0, (1.5, 0.0, 0.0), (1.0, 0.0, 0.0), (0.01, 0.0, 0.0, 0.01), 700, False),
+            1: EstimatedState(1, (3.5, 0.0, 0.0), (1.0, 0.0, 0.0), (0.01, 0.0, 0.0, 0.01), 700, False),
+        }
+        view, aoi = _local_ra_view(
+            observer=0, fresh_states=fresh, peer_states=peers, now_ms=1000
+        )
+        self.assertEqual(view[0].position, fresh[0].position)
+        self.assertEqual(view[0].timestamp_ms, 1000)
+        self.assertEqual(view[1].timestamp_ms, 700)
+        self.assertAlmostEqual(aoi[(0, 1)], 0.3)
+
+    def test_nominal_can_use_observed_state(self) -> None:
+        spec = _scenario("head_on")
+        env = MultiUAVEnv(spec["scenario"])
+        env.reset(seed=1)
+        base_goals = {
+            i: (float(env.goals[i, 0]), float(env.goals[i, 1]), 0.0)
+            for i in env.agent_ids
+        }
+        observed = _snapshots(env)
+        observed[0] = DroneSnapshot(0, base_goals[0], (0.0, 0.0, 0.0))
+        actions = _go_to_goal(
+            env,
+            base_goals=base_goals,
+            overrides=RecoveryOverrides(),
+            failed=set(),
+            aborted=set(),
+            observed_states=observed,
+        )
+        self.assertTrue(np.allclose(actions[0], np.zeros(2)))
+
+    def test_local_fresh_self_mode_runs(self) -> None:
+        spec = _scenario("head_on")
+        env = MultiUAVEnv(spec["scenario"])
+        ra = RuntimeAssurance(params=RuntimeAssuranceParams(tau_ctrl=0.0), v_max=1.5)
+        local = run_sim_episode(
+            spec=spec,
+            env=env,
+            seed=1,
+            ra=ra,
+            mode="CBF_ONLY",
+            llm_client=None,
+            llm_fallback=None,
+            max_steps=20,
+            real_time=False,
+            fault={"estimator_delay_ms": 300},
+            observation_mode=OBSERVATION_LOCAL_FRESH_SELF,
+        )
+        self.assertEqual(local["observation_mode"], OBSERVATION_LOCAL_FRESH_SELF)
 
 
 if __name__ == "__main__":

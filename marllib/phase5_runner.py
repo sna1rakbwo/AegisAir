@@ -13,6 +13,7 @@ intended to be run against an already-launched PX4 SITL + ROS 2 adapter stack.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import math
 import random
@@ -38,7 +39,11 @@ from px4_adapter.mqtt_codec import (
 )
 from px4_adapter.px4_codec import flu_to_px4_ned
 from px4_adapter.safety_state import LocalSafetyState, SafetyLimits
-from swarm.estimation import SharedStateEstimator, SharedStateEstimatorConfig
+from swarm.estimation import (
+    EstimatedState,
+    SharedStateEstimator,
+    SharedStateEstimatorConfig,
+)
 from swarm.ra.margins import RuntimeAssuranceParams
 from swarm.ra.runtime_assurance import RuntimeAssurance
 from swarm.recovery import (
@@ -81,6 +86,19 @@ COMMAND_TTL_S = 0.5
 NOMINAL_GAIN = 1.5
 ALTITUDE_HOLD_KP = 1.0
 MAX_VERTICAL_SPEED_MPS = 1.0
+
+OBSERVATION_LEGACY_ASYMMETRIC = "legacy_current_nominal_stale_ra"
+OBSERVATION_SHARED_CURRENT = "shared_current"
+OBSERVATION_SHARED_STALE = "shared_stale"
+OBSERVATION_LOCAL_FRESH_SELF = "local_fresh_self_stale_peers"
+OBSERVATION_MODES = frozenset(
+    {
+        OBSERVATION_LEGACY_ASYMMETRIC,
+        OBSERVATION_SHARED_CURRENT,
+        OBSERVATION_SHARED_STALE,
+        OBSERVATION_LOCAL_FRESH_SELF,
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -456,6 +474,38 @@ def _propagate_states(
     return propagated
 
 
+def _fresh_local_state(snapshot: DroneSnapshot, now_ms: int):
+    """Return a covariance-zero current onboard state for a local RA view."""
+    return EstimatedState(
+        drone_id=snapshot.drone_id,
+        position=snapshot.position,
+        velocity=snapshot.velocity or (0.0, 0.0, 0.0),
+        covariance=(0.0, 0.0, 0.0, 0.0),
+        timestamp_ms=now_ms,
+        dropped=False,
+    )
+
+
+def _local_ra_view(
+    *,
+    observer: int,
+    fresh_states: dict[int, DroneSnapshot],
+    peer_states: dict[int, Any],
+    now_ms: int,
+) -> tuple[dict[int, Any], dict[tuple[int, int], float]]:
+    """Build one drone's local view: fresh self, propagated stale peers."""
+    view = dict(peer_states)
+    view[observer] = _fresh_local_state(fresh_states[observer], now_ms)
+    aoi = {
+        (observer, peer): max(
+            0.0, (now_ms - peer_states[peer].timestamp_ms) / 1000.0
+        )
+        for peer in peer_states
+        if peer != observer
+    }
+    return view, aoi
+
+
 def _go_to_goal(
     env: MultiUAVEnv,
     *,
@@ -464,10 +514,34 @@ def _go_to_goal(
     failed: set[int],
     aborted: set[int],
     pilot: MappoPilot | None = None,
+    observed_states: dict[int, Any] | None = None,
 ) -> dict[int, np.ndarray]:
+    """Create nominal actions from the caller's visible state.
+
+    ``observed_states`` is optional to preserve the legacy current-truth pilot.
+    It lets the deterministic runner freeze whether nominal and RA share an
+    observation interface instead of silently mixing current truth with stale
+    peer telemetry.
+    """
+    positions = (
+        {
+            i: np.asarray(observed_states[i].position[:2], dtype=np.float64)
+            for i in env.agent_ids
+        }
+        if observed_states is not None
+        else {i: env.positions[i] for i in env.agent_ids}
+    )
+    velocities = (
+        {
+            i: np.asarray(
+                observed_states[i].velocity or (0.0, 0.0), dtype=np.float64
+            )[:2]
+            for i in env.agent_ids
+        }
+        if observed_states is not None
+        else {i: env.velocities[i] for i in env.agent_ids}
+    )
     if pilot is not None:
-        positions = {i: env.positions[i] for i in env.agent_ids}
-        velocities = {i: env.velocities[i] for i in env.agent_ids}
         goals = {
             i: np.asarray(overrides.goal_override.get(i, base_goals[i])[:2])
             for i in env.agent_ids
@@ -479,7 +553,7 @@ def _go_to_goal(
         actions = {}
         for i in env.agent_ids:
             goal = overrides.goal_override.get(i, base_goals[i])
-            delta = np.asarray(goal[:2]) - env.positions[i]
+            delta = np.asarray(goal[:2]) - positions[i]
             actions[i] = np.clip(
                 NOMINAL_GAIN * delta,
                 -env.scenario.speed_limit,
@@ -597,9 +671,14 @@ def run_sim_episode(
     sequential_pass: bool = False,
     urgent_drone: int | None = None,
     fault: dict[str, Any] | None = None,
+    observation_mode: str = OBSERVATION_LEGACY_ASYMMETRIC,
     replan_timeout_s: float | None = None,
     pilot: MappoPilot | None = None,
 ) -> dict[str, Any]:
+    if observation_mode not in OBSERVATION_MODES:
+        raise ValueError(f"unknown observation_mode: {observation_mode}")
+    if observation_mode == OBSERVATION_LOCAL_FRESH_SELF and pilot is not None:
+        raise ValueError("local fresh-self observation is not defined for a centralized pilot")
     env.reset(seed=seed)
     fault = fault or {}
     estimator_config = None
@@ -607,6 +686,11 @@ def run_sim_episode(
         estimator_config = _estimator_config_for_fault(fault)
     estimator = SharedStateEstimator(estimator_config) if estimator_config else None
     estimator_rng = np.random.default_rng(seed + 10_000_019) if estimator else None
+    local_ras = (
+        {i: copy.deepcopy(ra) for i in env.agent_ids}
+        if observation_mode == OBSERVATION_LOCAL_FRESH_SELF
+        else None
+    )
     replan_config = (
         ReplanConfig(replan_timeout_s=replan_timeout_s)
         if replan_timeout_s is not None
@@ -673,14 +757,6 @@ def run_sim_episode(
             else:
                 env.set_goal(i, np.asarray(base_goals[i][:2]))
 
-        nominal = _go_to_goal(
-            env,
-            base_goals=base_goals,
-            overrides=overrides,
-            failed=failed,
-            aborted=aborted,
-            pilot=pilot,
-        )
         if sequential_pass:
             for i in env.agent_ids:
                 dist = float(
@@ -736,11 +812,8 @@ def run_sim_episode(
                     seq_state["idx"] += 1
                     if seq_state["idx"] >= len(seq_state["order"]):
                         seq_state["active"] = False
-        if nominal_noise > 0:
-            rng = np.random.default_rng(seed * 1_000_000 + step)
-            for i in env.agent_ids:
-                nominal[i] = nominal[i] + rng.normal(0.0, nominal_noise, 2)
-        snapshots = _snapshots(env)
+        fresh_snapshots = _snapshots(env)
+        snapshots = fresh_snapshots
         pos_sigma = float(fault.get("perception_noise_pos_m") or 0.0)
         vel_sigma = float(fault.get("perception_noise_vel_mps") or 0.0)
         if pos_sigma > 0 or vel_sigma > 0:
@@ -770,7 +843,43 @@ def run_sim_episode(
                 for i in snapshots
             }
             snapshots = _propagate_states(snapshots, ages)
-        results = ra.filter(snapshots, nominal, t=t, aoi=aoi)
+        if observation_mode == OBSERVATION_LEGACY_ASYMMETRIC:
+            nominal_states = None
+        elif observation_mode == OBSERVATION_LOCAL_FRESH_SELF:
+            # The go-to-goal pilot only consumes its own state.  Its own
+            # odometry remains fresh; peer state is consumed only by local RA.
+            nominal_states = fresh_snapshots
+        else:
+            nominal_states = snapshots
+        nominal = _go_to_goal(
+            env,
+            base_goals=base_goals,
+            overrides=overrides,
+            failed=failed,
+            aborted=aborted,
+            pilot=pilot,
+            observed_states=nominal_states,
+        )
+        if nominal_noise > 0:
+            rng = np.random.default_rng(seed * 1_000_000 + step)
+            for i in env.agent_ids:
+                nominal[i] = nominal[i] + rng.normal(0.0, nominal_noise, 2)
+
+        if local_ras is None:
+            results = ra.filter(snapshots, nominal, t=t, aoi=aoi)
+        else:
+            now_ms = int(t * 1000)
+            results = {}
+            for i in env.agent_ids:
+                local_view, local_aoi = _local_ra_view(
+                    observer=i,
+                    fresh_states=fresh_snapshots,
+                    peer_states=snapshots,
+                    now_ms=now_ms,
+                )
+                results[i] = local_ras[i].filter(
+                    local_view, nominal, t=t, aoi=local_aoi
+                )[i]
         cbf_events += sum(1 for r in results.values() if r.intervened)
         min_rho = min(min_rho, min(r.safety_margin for r in results.values()))
         for i in env.agent_ids:
@@ -883,6 +992,7 @@ def run_sim_episode(
         replanner.shutdown()
 
     return {
+        "observation_mode": observation_mode,
         "collision": collision,
         "completed": completed,
         "completion_steps": completion_step,

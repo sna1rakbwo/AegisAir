@@ -1,0 +1,8 @@
+{
+  "protocol": "aegisair-stale-observation-diagnosis-v1",
+  "seeds": [601, 602, 603, 604, 605, 606, 607, 608, 609, 610, 611, 612, 613, 614, 615, 616, 617, 618, 619, 620, 621, 622, 623, 624, 625, 626, 627, 628, 629, 630, 631, 632, 633, 634, 635, 636, 637, 638, 639, 640, 641, 642, 643, 644, 645, 646, 647, 648, 649, 650],
+  "delay_ms": 300,
+  "diagnostics": ["D0_current_shared", "D1_legacy_asymmetric", "D2_shared_stale", "D3_local_fresh_self"],
+  "scenarios": ["straight_line", "crossing", "dense_multi_uav"],
+  "rule": "D0-D3 仅诊断观测一致性，不覆盖 C1 v4。"
+}
