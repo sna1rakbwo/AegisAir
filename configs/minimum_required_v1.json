@@ -1,0 +1,52 @@
+{
+  "protocol": "aegisair-minimum-required-v1",
+  "scope": "lightweight_simulation_and_px4_sitl_gazebo_only",
+  "training": {
+    "checkpoint_root": "/Volumes/Expansion/safedrones_marllib_vec",
+    "training_seeds": [1, 2, 3, 4, 5],
+    "checkpoint_scenarios": ["randomized_2", "randomized_4", "randomized_8"]
+  },
+  "methods": {
+    "B0": "nominal_only_observe_margin",
+    "B1": "static_distance_velocity_cbf_qp",
+    "B2": "acceleration_hocbf_qp",
+    "B3": "risk_adaptive_exact_zoh_ra",
+    "R0": "B3_ra_only",
+    "R1": "B3_rule_mission_planner",
+    "R2": "B3_local_qwen3_4b_4bit_validator_fallback"
+  },
+  "b2_rationale": "HOCBF already has a centralized implementation and regression tests; ZOCBF-style is not included until a fair adaptation is frozen.",
+  "runtime_assurance": {
+    "d0_m": 0.5,
+    "tau_r_s": 0.3,
+    "a_eff_mps2": 2.0,
+    "perception_beta": 3.0,
+    "v_max_mps": 2.0,
+    "a_max_mps2": 3.0,
+    "gamma": 0.1,
+    "tau_hat_s": 0.7,
+    "tau_interval_s": [0.53, 1.76],
+    "qp_infeasible_action": "deterministic_hard_brake"
+  },
+  "llm": {
+    "model": "/Users/lijiajun/.cache/aegisair-qwen3-4b-4bit-bench",
+    "thinking": false,
+    "max_tokens": 48,
+    "validator": "fail_closed",
+    "fallback": "RuleMissionPlanner"
+  },
+  "metrics": {
+    "collision": "any_pair_distance_below_environment_collision_radius",
+    "boundary_violation": "minimum_rho_less_than_zero",
+    "completion": "all_non_aborted_agents_reach_goal_epsilon",
+    "safety_bypass": "accepted_command_bypasses_adapter_or_ra",
+    "fallback": "ra_qp_infeasible_or_recovery_validator_rejection"
+  },
+  "seed_manifests": {
+    "two_uav_mechanism": [101, 102, 103, 104, 105, 106, 107, 108, 109, 110],
+    "four_uav_core": [201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250],
+    "recovery": [301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330],
+    "eight_uav": [401, 402, 403, 404, 405, 406, 407, 408, 409, 410, 411, 412, 413, 414, 415, 416, 417, 418, 419, 420, 421, 422, 423, 424, 425, 426, 427, 428, 429, 430]
+  },
+  "stopping_rule": "After final-test execution, do not modify thresholds, discard trials, or append seeds based on outcomes."
+}
