@@ -20,7 +20,9 @@
 
 ## 原始数据
 
-- Git 提交：`cd1186e54762f6c4032c59377c4c522b2b6bcc0c`
+- 运行时基线提交：`cd1186e54762f6c4032c59377c4c522b2b6bcc0c`；本 smoke runner
+  在产物校验后被纳入后续提交。运行时脚本 SHA-256：
+  `ded1a2d13a7711c6e2b9ed1aac34acd9e27f334a615c599f4ab3660a73cda737`。
 - 路径：`/Volumes/Expansion/Aegis/aegisair_baseline_smoke_20260820_cd1186e/paired_baseline_smoke.json`
 - SHA-256：`78f7570d1f39ec79b8912c9473dd2c0e09cba9e769a9843b2b12fddfb60d9c7e`
 
