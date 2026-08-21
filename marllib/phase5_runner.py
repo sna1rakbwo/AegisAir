@@ -87,6 +87,12 @@ COMMAND_TTL_S = 0.5
 NOMINAL_GAIN = 1.5
 ALTITUDE_HOLD_KP = 1.0
 MAX_VERTICAL_SPEED_MPS = 1.0
+RESET_POSITION_TOLERANCE_M = 0.20
+RESET_SPEED_TOLERANCE_MPS = 0.15
+RESET_MAX_SPEED_MPS = 1.0
+RESET_MAX_VERTICAL_SPEED_MPS = 0.5
+RESET_STABLE_S = 1.0
+RESET_TIMEOUT_S = 45.0
 
 OBSERVATION_LEGACY_ASYMMETRIC = "legacy_current_nominal_stale_ra"
 OBSERVATION_SHARED_CURRENT = "shared_current"
@@ -1307,6 +1313,26 @@ def run_sim_episode(
 # ---------------------------------------------------------------------------
 
 
+def _reset_velocity_command(
+    position: tuple[float, float, float],
+    target: tuple[float, float, float],
+) -> tuple[float, float, float]:
+    """Return a bounded FLU velocity that homes a vehicle without mode changes.
+
+    Gazebo ``set_pose`` changes only the model pose; it does not reset PX4's
+    EKF/offboard state.  Repositioning must therefore travel through the same
+    velocity-offboard path as the measured crossing.  Horizontal speed is
+    norm-bounded so diagonals cannot exceed the adapter safety limit.
+    """
+    error = np.asarray(target, dtype=np.float64) - np.asarray(position, dtype=np.float64)
+    horizontal = error[:2]
+    distance = float(np.linalg.norm(horizontal))
+    if distance > 0.0:
+        horizontal *= min(RESET_MAX_SPEED_MPS / distance, 1.0)
+    vertical = float(np.clip(error[2], -RESET_MAX_VERTICAL_SPEED_MPS, RESET_MAX_VERTICAL_SPEED_MPS))
+    return (float(horizontal[0]), float(horizontal[1]), vertical)
+
+
 def run_mqtt_loop(
     *,
     drone_ids: list[int],
@@ -1381,6 +1407,7 @@ def run_mqtt_loop(
     )
     overrides = RecoveryOverrides()
     telemetry: dict[int, DroneSnapshot] = {}
+    telemetry_health: dict[int, dict[str, bool | int]] = {}
     estimator = (
         SharedStateEstimator(estimator_config)
         if estimator_config is not None
@@ -1431,6 +1458,12 @@ def run_mqtt_loop(
                 return
             snap = snapshot_from_telemetry(payload)
             telemetry[snap.drone_id] = snap
+            telemetry_health[snap.drone_id] = {
+                "armed": bool(payload.get("armed", False)),
+                "failsafe": bool(payload.get("failsafe", False)),
+                "connection_lost": bool(payload.get("connection_lost", False)),
+                "nav_state": int(payload.get("nav_state", -1)),
+            }
 
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="aegisair-phase5")
     client.on_connect = on_connect
@@ -1448,12 +1481,23 @@ def run_mqtt_loop(
         # Arm, then takeoff to the frozen cruise altitude.
         arm_deadline = time.time() + 30.0
         while time.time() < arm_deadline and not all(
-            telemetry.get(i) is not None and telemetry[i].status == "armed"
+            telemetry.get(i) is not None
+            and telemetry[i].status == "armed"
+            and not telemetry_health.get(i, {}).get("failsafe", True)
+            and not telemetry_health.get(i, {}).get("connection_lost", True)
             for i in drone_ids
         ):
             for i in drone_ids:
                 publish(i, "arm", native=True)
             time.sleep(0.5)
+        if not all(
+            telemetry.get(i) is not None
+            and telemetry[i].status == "armed"
+            and not telemetry_health.get(i, {}).get("failsafe", True)
+            and not telemetry_health.get(i, {}).get("connection_lost", True)
+            for i in drone_ids
+        ):
+            raise SystemExit("PX4 did not arm cleanly before live episode")
 
         takeoff_deadline = time.time() + 30.0
         while time.time() < takeoff_deadline and not all(
@@ -1464,23 +1508,74 @@ def run_mqtt_loop(
             for i in drone_ids:
                 publish(i, "takeoff", altitude_m=CRUISE_ALTITUDE_M, native=True)
             time.sleep(0.5)
+        if not all(
+            telemetry.get(i) is not None
+            and telemetry[i].position[2] > CRUISE_ALTITUDE_M * 0.5
+            for i in drone_ids
+        ):
+            raise SystemExit("PX4 did not reach cruise altitude before live episode")
 
-        # Reset to the frozen start poses before the crossing so repeated
-        # episodes do not start from the previous episode's goal positions.
+        # Reset through PX4 velocity-offboard, never Gazebo teleport.  A model
+        # teleport leaves EKF/offboard state behind and can silently invalidate
+        # the subsequent crossing.  A reset is accepted only after both the
+        # position error and measured residual speed hold below frozen bounds.
+        reset_elapsed_s: float | None = None
         if reset_starts is not None:
-            reset_deadline = time.time() + 45.0
-            while time.time() < reset_deadline and not all(
-                telemetry.get(i) is not None
-                and math.hypot(
-                    telemetry[i].position[0] - reset_starts[i][0],
-                    telemetry[i].position[1] - reset_starts[i][1],
-                )
-                < 0.5
-                for i in drone_ids
-            ):
+            reset_started = time.monotonic()
+            reset_deadline = reset_started + RESET_TIMEOUT_S
+            stable_since: float | None = None
+            while time.monotonic() < reset_deadline:
+                ready = True
                 for i in drone_ids:
-                    publish(i, "move_to", target=reset_starts[i], native=False)
-                time.sleep(0.3)
+                    snap = telemetry.get(i)
+                    health = telemetry_health.get(i, {})
+                    if (
+                        snap is None
+                        or snap.status != "armed"
+                        or bool(health.get("failsafe", True))
+                        or bool(health.get("connection_lost", True))
+                    ):
+                        ready = False
+                        continue
+                    position_error = float(
+                        np.linalg.norm(
+                            np.asarray(reset_starts[i]) - np.asarray(snap.position)
+                        )
+                    )
+                    speed = float(np.linalg.norm(snap.velocity or (float("inf"),) * 3))
+                    if (
+                        position_error > RESET_POSITION_TOLERANCE_M
+                        or speed > RESET_SPEED_TOLERANCE_MPS
+                    ):
+                        ready = False
+                    publish(
+                        i,
+                        "velocity",
+                        velocity=_reset_velocity_command(snap.position, reset_starts[i]),
+                        native=False,
+                    )
+                now = time.monotonic()
+                if ready:
+                    stable_since = stable_since or now
+                    if now - stable_since >= RESET_STABLE_S:
+                        reset_elapsed_s = now - reset_started
+                        break
+                else:
+                    stable_since = None
+                time.sleep(1.0 / rate_hz)
+            if reset_elapsed_s is None:
+                diagnostics = {
+                    i: {
+                        "position": telemetry[i].position if i in telemetry else None,
+                        "velocity": telemetry[i].velocity if i in telemetry else None,
+                        "health": telemetry_health.get(i),
+                    }
+                    for i in drone_ids
+                }
+                raise SystemExit(
+                    "PX4 velocity reset failed to settle within "
+                    f"{RESET_TIMEOUT_S:.0f}s: {diagnostics}"
+                )
 
         period = 1.0 / rate_hz
         step = 0
@@ -1753,6 +1848,7 @@ def run_mqtt_loop(
         "min_rho": round(min_rho, 6) if min_rho is not None else None,
         "final_positions": final_positions,
         "trajectory": str(trajectory) if trajectory is not None else None,
+        "reset_elapsed_s": round(reset_elapsed_s, 3) if reset_elapsed_s is not None else None,
         "counters": (
             {
                 "triggers": replanner.counters.triggers,

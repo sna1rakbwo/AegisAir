@@ -12,6 +12,7 @@ from marllib.phase5_runner import (
     OBSERVATION_LOCAL_FRESH_SELF,
     _audit_exact_zoh_interval,
     _priority_order,
+    _reset_velocity_command,
     _step_exact_zoh_execution,
     _go_to_goal,
     _local_ra_view,
@@ -116,6 +117,22 @@ class Phase5CommandEncodingTest(unittest.TestCase):
         self.assertEqual(command["action"], "velocity")
         self.assertEqual(command["source_frame"], "FLU")
         self.assertEqual(command["velocity"], [1.0, -0.5, 0.2])
+
+    def test_reset_velocity_homes_in_flu_without_exceeding_limits(self) -> None:
+        velocity = _reset_velocity_command(
+            position=(-3.0, 1.0, 2.0),
+            target=(3.0, 1.0, 2.5),
+        )
+        self.assertAlmostEqual(velocity[0], 1.0)
+        self.assertAlmostEqual(velocity[1], 0.0)
+        self.assertAlmostEqual(velocity[2], 0.5)
+
+    def test_reset_velocity_has_norm_bounded_diagonal_speed(self) -> None:
+        velocity = _reset_velocity_command(
+            position=(0.0, 0.0, 2.5),
+            target=(3.0, 4.0, 2.5),
+        )
+        self.assertAlmostEqual(float(np.linalg.norm(velocity[:2])), 1.0)
 
     def test_velocity_command_passes_local_safety(self) -> None:
         timestamp_ms = 1000
