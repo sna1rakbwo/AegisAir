@@ -73,13 +73,13 @@ class ExpiredPlanClient(LLMRecoveryClient):
 
 def make_ra() -> RuntimeAssurance:
     return RuntimeAssurance(
-        params=RuntimeAssuranceParams(tau_ctrl=0.1),
+        params=RuntimeAssuranceParams(tau_ctrl=0.2),
         v_max=1.5,
         sampled_data=True,
         gamma=0.1,
-        tau_px4=0.7,
-        tau_px4_min=0.7,
-        tau_px4_max=0.7,
+        tau_px4=0.2,
+        tau_px4_min=0.2,
+        tau_px4_max=0.2,
     )
 
 
@@ -286,8 +286,8 @@ def main() -> int:
             "fault_seeds": args.fault_seeds,
             "max_steps": args.max_steps,
             "execution_tau_s": 0.2,
-            "tau_ctrl_s": 0.1,
-            "tau_px4_s": 0.7,
+            "tau_ctrl_s": 0.2,
+            "tau_px4_s": 0.2,
             "gamma": 0.1,
             "conditions": list(active_conditions),
         },

@@ -201,11 +201,11 @@ waypoint = corner + sign·2.0·(corner - center)        （clip 到 arena）
 ## 8. 默认参数（RuntimeAssuranceParams）
 
 ```text
-d0=0.5, tau_r=0.3, tau_ctrl=0.1(live), a_eff=2.0,
+d0=0.5, tau_r=0.3, tau_ctrl=0.2(live), a_eff=2.0,
 beta=3.0, v_max=2.0, a_max=3.0, alpha=1.0,
 ema_lambda=0.8, degradation_dt=0.1, prediction_horizon=1.5,
 rho_pred_threshold=0.0, q_pred=0.0, estimated_recovery_latency=0.5
 ```
 
 Phase 5/6 冻结控制：`sampled-data, gamma=0.1`；`tau_px4 ∈ [tau_min, tau_max]`
-（nominal `tau_px4=0.7`，robust QP 用经验区间 `[0.53, 1.76]`）。
+（nominal `tau_px4=0.2`，robust QP 用区间 `[tau_px4_min, tau_px4_max]`）。

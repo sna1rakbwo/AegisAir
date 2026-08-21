@@ -5,8 +5,8 @@ Requires the full stack already up: amqtt broker, 2x PX4 SITL + Gazebo,
 GCS heartbeat, and the ``aegisair-adapters`` container publishing telemetry.
 
 E0 = instantaneous (tau_px4=0, exact_zoh)
-E1 = legacy trapezoidal heuristic (tau_px4=0.7, legacy_trapezoidal)
-E2 = exact-ZOH projected barrier (tau_px4=0.7, exact_zoh)
+E1 = legacy trapezoidal heuristic (tau_px4=0.2, legacy_trapezoidal)
+E2 = exact-ZOH projected barrier (tau_px4=0.2, exact_zoh)
 """
 
 from __future__ import annotations
@@ -26,8 +26,8 @@ from marllib.phase5_runner import run_mqtt_loop
 
 MODELS = {
     "E0": {"tau_px4": 0.0, "execution_model": "exact_zoh"},
-    "E1": {"tau_px4": 0.7, "execution_model": "legacy_trapezoidal"},
-    "E2": {"tau_px4": 0.7, "execution_model": "exact_zoh"},
+    "E1": {"tau_px4": 0.2, "execution_model": "legacy_trapezoidal"},
+    "E2": {"tau_px4": 0.2, "execution_model": "exact_zoh"},
 }
 
 
@@ -71,7 +71,7 @@ def main() -> int:
                 max_steps=args.max_steps,
                 reset_starts=reset_starts,
                 rate_hz=args.rate_hz,
-                tau_ctrl=0.1,
+                tau_ctrl=0.2,
                 tau_px4=cfg["tau_px4"],
                 execution_model=cfg["execution_model"],
                 sampled_data=True,
@@ -119,8 +119,10 @@ def main() -> int:
             "seeds": args.seeds,
             "max_steps": args.max_steps,
             "rate_hz": args.rate_hz,
-            "tau_ctrl_s": 0.1,
+            "tau_ctrl_s": 0.2,
             "gamma": 0.1,
+            "tau_px4_s": {m: MODELS[m]["tau_px4"] for m in active},
+            "execution_model": {m: MODELS[m]["execution_model"] for m in active},
             "models": active,
             "collision_radius_m": 0.25,
         },

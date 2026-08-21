@@ -30,13 +30,13 @@ from swarm.recovery import DeterministicRecoveryClient, RuleMissionPlanner
 
 def make_ra() -> RuntimeAssurance:
     return RuntimeAssurance(
-        params=RuntimeAssuranceParams(tau_ctrl=0.1),
+        params=RuntimeAssuranceParams(tau_ctrl=0.2),
         v_max=1.5,
         sampled_data=True,
         gamma=0.1,
-        tau_px4=0.7,
-        tau_px4_min=0.7,
-        tau_px4_max=0.7,
+        tau_px4=0.2,
+        tau_px4_min=0.2,
+        tau_px4_max=0.2,
     )
 
 
