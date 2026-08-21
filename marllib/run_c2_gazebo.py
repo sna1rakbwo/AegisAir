@@ -5,8 +5,8 @@ Requires the full stack already up: amqtt broker, 2x PX4 SITL + Gazebo,
 GCS heartbeat, and the ``aegisair-adapters`` container publishing telemetry.
 
 E0 = instantaneous (tau_px4=0, exact_zoh)
-E1 = legacy trapezoidal heuristic (tau_px4=0.2, legacy_trapezoidal)
-E2 = exact-ZOH projected barrier (tau_px4=0.2, exact_zoh)
+E1 = legacy trapezoidal heuristic (tau_px4=0.7, legacy_trapezoidal)
+E2 = exact-ZOH projected barrier (tau_px4=0.7, exact_zoh)
 """
 
 from __future__ import annotations
@@ -26,8 +26,8 @@ from marllib.phase5_runner import run_mqtt_loop
 
 MODELS = {
     "E0": {"tau_px4": 0.0, "execution_model": "exact_zoh"},
-    "E1": {"tau_px4": 0.2, "execution_model": "legacy_trapezoidal"},
-    "E2": {"tau_px4": 0.2, "execution_model": "exact_zoh"},
+    "E1": {"tau_px4": 0.7, "execution_model": "legacy_trapezoidal"},
+    "E2": {"tau_px4": 0.7, "execution_model": "exact_zoh"},
 }
 
 
@@ -46,9 +46,14 @@ def main() -> int:
     active = [m for m in args.models.split(",") if m in MODELS]
     drone_ids = [2, 3]
     episodes = []
-    for name in active:
-        cfg = MODELS[name]
-        for seed in range(1, args.seeds + 1):
+    # A seed is one physical trial.  Run all execution models back-to-back for
+    # that trial so the reset gate makes the resulting E0/E1/E2 rows pairable;
+    # grouping all E0 runs before E1/E2 would silently let long-run SITL drift
+    # confound the purported paired comparison.
+    episode_order = 0
+    for seed in range(1, args.seeds + 1):
+        for name in active:
+            cfg = MODELS[name]
             lateral = args.lateral
             base_goals = {
                 2: (3.0, lateral, 2.5),
@@ -66,7 +71,7 @@ def main() -> int:
                 max_steps=args.max_steps,
                 reset_starts=reset_starts,
                 rate_hz=args.rate_hz,
-                tau_ctrl=0.2,
+                tau_ctrl=0.1,
                 tau_px4=cfg["tau_px4"],
                 execution_model=cfg["execution_model"],
                 sampled_data=True,
@@ -77,13 +82,17 @@ def main() -> int:
                 {
                     "model": name,
                     "seed": seed,
+                    "trial_index": seed,
+                    "episode_order": episode_order,
                     "min_rho": run.get("min_rho"),
                     "min_distance_m": min_distance,
                     "collision": bool(min_distance is not None and min_distance < 0.25),
                     "cbf_events": run.get("cbf_events"),
                     "steps": run.get("steps"),
+                    "reset_elapsed_s": run.get("reset_elapsed_s"),
                 }
             )
+            episode_order += 1
             print(
                 f"{name} seed={seed} min_rho={run.get('min_rho')} "
                 f"min_distance={min_distance} cbf={run.get('cbf_events')}",
@@ -110,7 +119,7 @@ def main() -> int:
             "seeds": args.seeds,
             "max_steps": args.max_steps,
             "rate_hz": args.rate_hz,
-            "tau_ctrl_s": 0.2,
+            "tau_ctrl_s": 0.1,
             "gamma": 0.1,
             "models": active,
             "collision_radius_m": 0.25,
