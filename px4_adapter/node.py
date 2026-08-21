@@ -34,6 +34,7 @@ from px4_adapter.mqtt_codec import (
 from px4_adapter.px4_codec import (
     build_control_plan,
     flu_to_px4_ned,
+    flu_to_local_ned,
 )
 from px4_adapter.safety_state import LocalSafetyState, SafetyLimits
 
@@ -378,7 +379,11 @@ def main() -> None:
                 return None
             if command.source_frame == "PX4_NED":
                 return command.target
-            return flu_to_px4_ned(*command.target)
+            origin = tuple(
+                float(v)
+                for v in self.config["telemetry"].get("origin_offset_ned", [0.0, 0.0, 0.0])
+            )
+            return flu_to_local_ned(*command.target, origin_offset_ned=origin)
 
         def _convert_velocity(self, command: Px4Command) -> tuple[float, float, float] | None:
             if command.velocity is None:

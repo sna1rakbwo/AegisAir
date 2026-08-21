@@ -33,6 +33,26 @@ def flu_to_px4_ned(x: float, y: float, z: float) -> tuple[float, float, float]:
     return (float(x), -float(y), -float(z))
 
 
+def flu_to_local_ned(
+    x: float,
+    y: float,
+    z: float,
+    origin_offset_ned: tuple[float, float, float] = (0.0, 0.0, 0.0),
+) -> tuple[float, float, float]:
+    """Convert a shared-frame FLU position to a PX4 local-NED position.
+
+    Telemetry is emitted in the shared frame (``local_ned + origin_offset``);
+    PX4 position setpoints are local-NED.  This applies the FLU->NED flip and
+    then removes the per-instance origin offset.
+    """
+    nx, ny, nz = flu_to_px4_ned(x, y, z)
+    return (
+        nx - origin_offset_ned[0],
+        ny - origin_offset_ned[1],
+        nz - origin_offset_ned[2],
+    )
+
+
 def _finite(value: Any, field_name: str) -> float:
     value = float(value)
     if not math.isfinite(value):

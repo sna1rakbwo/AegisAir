@@ -8,6 +8,7 @@ from px4_adapter.px4_codec import (
     VEHICLE_CMD_NAV_LAND,
     VEHICLE_CMD_NAV_RETURN_TO_LAUNCH,
     build_control_plan,
+    flu_to_local_ned,
     flu_to_px4_ned,
     px4_ned_to_flu,
 )
@@ -18,6 +19,21 @@ class Px4CodecTest(unittest.TestCase):
         flu = px4_ned_to_flu(1.0, 2.0, -3.0)
         self.assertEqual(flu, (1.0, -2.0, 3.0))
         self.assertEqual(flu_to_px4_ned(*flu), (1.0, 2.0, -3.0))
+
+    def test_flu_to_local_ned_removes_origin_offset(self) -> None:
+        # Shared-frame FLU target for drone 2, whose local origin is offset by
+        # (-3, 0, 0) in NED.  It must land at local NED (0, 0, -2.5).
+        shared_flu = (-3.0, 0.0, 2.5)
+        origin = (-3.0, 0.0, 0.0)
+        self.assertEqual(
+            flu_to_local_ned(*shared_flu, origin_offset_ned=origin),
+            (0.0, 0.0, -2.5),
+        )
+        # Without an origin offset it stays a pure FLU->NED flip.
+        self.assertEqual(
+            flu_to_local_ned(*shared_flu),
+            (-3.0, 0.0, -2.5),
+        )
 
     def test_arm_plan_contains_mode_and_arm(self) -> None:
         plan = build_control_plan("arm", current_position=(0.0, 0.0, 0.0))
