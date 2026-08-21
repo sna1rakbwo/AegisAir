@@ -1329,6 +1329,7 @@ def run_mqtt_loop(
     tau_px4: float = 0.0,
     tau_px4_min: float | None = None,
     tau_px4_max: float | None = None,
+    execution_model: str = "exact_zoh",
     sampled_data: bool = False,
     gamma: float = 0.1,
     sequential_pass: bool = False,
@@ -1360,6 +1361,7 @@ def run_mqtt_loop(
         tau_px4=tau_px4,
         tau_px4_min=tau_px4_min,
         tau_px4_max=tau_px4_max,
+        execution_model=execution_model,
         sampled_data=sampled_data,
         gamma=gamma,
     )
@@ -1814,6 +1816,12 @@ def main() -> int:
     parser.add_argument("--tau-px4-max", type=float, default=None)
     parser.add_argument("--sampled-data", action="store_true")
     parser.add_argument("--gamma", type=float, default=0.1)
+    parser.add_argument(
+        "--execution-model",
+        choices=["exact_zoh", "legacy_trapezoidal"],
+        default="exact_zoh",
+        help="Execution model for sampled-data RA (C2 E1/E2 axis).",
+    )
     parser.add_argument("--sequential-pass", action="store_true")
     parser.add_argument("--urgent-drone", type=int, default=None)
     parser.add_argument("--replan-timeout-s", type=float, default=None)
@@ -1996,6 +2004,7 @@ def main() -> int:
                     tau_px4=args.tau_px4,
                     tau_px4_min=args.tau_px4_min,
                     tau_px4_max=args.tau_px4_max,
+                    execution_model=args.execution_model,
                     sampled_data=args.sampled_data,
                     gamma=args.gamma,
                     sequential_pass=args.sequential_pass,
