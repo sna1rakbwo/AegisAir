@@ -1,0 +1,57 @@
+{
+  "protocol_id": "aegisair-c1-hocbf-v4-px4-postfreeze-ood-v1",
+  "phase": "post_freeze_ood_generalization",
+  "parent_manifest": "configs/c1_hocbf_v4_px4_validation_v1.json",
+  "rate_hz": 20.0,
+  "max_steps": 400,
+  "goal_epsilon": 0.5,
+  "execution_tau_s": 0.70,
+  "drone_ids": [2, 3],
+  "base_goals": {"2": [4.0, -0.5, 2.5], "3": [-4.0, 0.5, 2.5]},
+  "reset_starts": {"2": [-4.0, 0.5, 2.5], "3": [4.0, -0.5, 2.5]},
+  "scenarios": {
+    "wide_head_on": {
+      "description": "未见过的更大横向间隔正面对向交会。",
+      "base_goals": {"2": [4.0, 1.5, 2.5], "3": [-4.0, -1.5, 2.5]},
+      "reset_starts": {"2": [-4.0, -1.5, 2.5], "3": [4.0, 1.5, 2.5]}
+    },
+    "diagonal_crossing": {
+      "description": "未见过的非对称斜向交会，交会角度和初始横向位置均改变。",
+      "base_goals": {"2": [4.0, 1.5, 2.5], "3": [-4.0, -0.5, 2.5]},
+      "reset_starts": {"2": [-4.0, -1.5, 2.5], "3": [4.0, 0.5, 2.5]}
+    },
+    "command_hold_jitter": {
+      "description": "原几何下的独立命令接口扰动：每架机每个 20 Hz 更新以固定概率保持前一周期命令。",
+      "base_goals": {"2": [4.0, -0.5, 2.5], "3": [-4.0, 0.5, 2.5]},
+      "reset_starts": {"2": [-4.0, 0.5, 2.5], "3": [4.0, -0.5, 2.5]}
+    }
+  },
+  "command_hold_jitter": {
+    "command_hold_jitter": {"probability": 0.20, "seed_offset": 930000}
+  },
+  "methods": {
+    "AEGIS_HOCBF_V4": {"constraint_boundary": "full", "k1": 4.0, "k2": 4.0, "boundary_guard": 1.0, "boundary_buffer_m": 0.30, "barrier_model_tau_s": 0.70, "predictive_recovery": true, "prediction_execution_fraction": 0.0, "prediction_steps": 3, "recovery_reserve_threshold": 1.0, "recovery_alpha": 0.5, "recovery_braking_accel_mps2": 2.0, "recovery_boundary_buffer_m": 0.30, "recovery_clear_steps": 5},
+    "AEGIS_HOCBF_V4_REACTIVE": {"constraint_boundary": "full", "k1": 4.0, "k2": 4.0, "boundary_guard": 1.0, "boundary_buffer_m": 0.30, "barrier_model_tau_s": 0.70, "predictive_recovery": false, "recovery_alpha": 0.5, "recovery_braking_accel_mps2": 2.0, "recovery_boundary_buffer_m": 0.30, "recovery_clear_steps": 5},
+    "PB_CBF": {"constraint_boundary": "static", "alpha": 0.5, "braking_accel_mps2": 2.0, "boundary_buffer_m": 0.30, "infeasible_fallback": "max_brake"}
+  },
+  "trials": [
+    {"trial_id": "ood_wide_01", "scenario_id": "wide_head_on", "seed": 9301, "condition_order": ["AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE", "PB_CBF"]},
+    {"trial_id": "ood_wide_02", "scenario_id": "wide_head_on", "seed": 9302, "condition_order": ["AEGIS_HOCBF_V4_REACTIVE", "PB_CBF", "AEGIS_HOCBF_V4"]},
+    {"trial_id": "ood_wide_03", "scenario_id": "wide_head_on", "seed": 9303, "condition_order": ["PB_CBF", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE"]},
+    {"trial_id": "ood_wide_04", "scenario_id": "wide_head_on", "seed": 9304, "condition_order": ["AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE", "PB_CBF"]},
+    {"trial_id": "ood_wide_05", "scenario_id": "wide_head_on", "seed": 9305, "condition_order": ["AEGIS_HOCBF_V4_REACTIVE", "PB_CBF", "AEGIS_HOCBF_V4"]},
+    {"trial_id": "ood_diagonal_01", "scenario_id": "diagonal_crossing", "seed": 9311, "condition_order": ["AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE", "PB_CBF"]},
+    {"trial_id": "ood_diagonal_02", "scenario_id": "diagonal_crossing", "seed": 9312, "condition_order": ["AEGIS_HOCBF_V4_REACTIVE", "PB_CBF", "AEGIS_HOCBF_V4"]},
+    {"trial_id": "ood_diagonal_03", "scenario_id": "diagonal_crossing", "seed": 9313, "condition_order": ["PB_CBF", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE"]},
+    {"trial_id": "ood_diagonal_04", "scenario_id": "diagonal_crossing", "seed": 9314, "condition_order": ["AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE", "PB_CBF"]},
+    {"trial_id": "ood_diagonal_05", "scenario_id": "diagonal_crossing", "seed": 9315, "condition_order": ["AEGIS_HOCBF_V4_REACTIVE", "PB_CBF", "AEGIS_HOCBF_V4"]},
+    {"trial_id": "ood_jitter_01", "scenario_id": "command_hold_jitter", "seed": 9321, "condition_order": ["AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE", "PB_CBF"]},
+    {"trial_id": "ood_jitter_02", "scenario_id": "command_hold_jitter", "seed": 9322, "condition_order": ["AEGIS_HOCBF_V4_REACTIVE", "PB_CBF", "AEGIS_HOCBF_V4"]},
+    {"trial_id": "ood_jitter_03", "scenario_id": "command_hold_jitter", "seed": 9323, "condition_order": ["PB_CBF", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE"]},
+    {"trial_id": "ood_jitter_04", "scenario_id": "command_hold_jitter", "seed": 9324, "condition_order": ["AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE", "PB_CBF"]},
+    {"trial_id": "ood_jitter_05", "scenario_id": "command_hold_jitter", "seed": 9325, "condition_order": ["AEGIS_HOCBF_V4_REACTIVE", "PB_CBF", "AEGIS_HOCBF_V4"]}
+  ],
+  "analysis": "逐场景报告每法 5 次绝对结果，以及 v4 相对 reactive/PB 的配对 delta 和 bootstrap CI；不得合并不同 rho 定义。",
+  "go_criteria": "每个场景中 v4 为 5/5 mission_complete、collision=0、min_rho>0，selected-QP infeasible=0；不以 OOD 结果改参数。",
+  "stopping_rule": "若某一场景的完整 v4 出现 collision、未完成或 min_rho<=0，完成该配对 trial 的其余方法后停止该场景未运行 seed；标记该场景 No-Go，不调参、不追加 seed。"
+}

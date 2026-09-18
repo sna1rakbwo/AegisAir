@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "intent_text": "1号从左侧通过，2号保持右侧间隔，风险解除后继续原目标",
+  "commands": [
+    {
+      "drone": 1,
+      "action": "REROUTE",
+      "waypoint": [3.0, -0.4, 1.0],
+      "priority": "normal",
+      "ttl_sec": 8.0,
+      "command_id": "recovery-1"
+    }
+  ],
+  "constraints": {
+    "keep_min_distance_m": 1.6,
+    "avoid_center_zone": true
+  },
+  "rationale": "降低冲突侧通过，保持侧向间隔",
+  "timestamp_ms": 1786728517875
+}

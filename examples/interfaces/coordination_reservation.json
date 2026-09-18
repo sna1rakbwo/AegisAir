@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "step": 80,
+  "coordination_mode": "clear",
+  "admission_triggers": ["conflict_zone", "predicted_rho_low"],
+  "authorized_drone_ids": [2],
+  "held_drone_ids": [3, 4, 5],
+  "frozen_hold_goals": {"3": [4.5, -1.1, 2.5]},
+  "clearance_drone_id": 2,
+  "clearance_goal": [3.0, -3.0, 2.5],
+  "service_latched_drone_ids": [2],
+  "cleared_drone_ids": [],
+  "final_returned_drone_ids": [],
+  "conflict_zone_id": "crossing_center",
+  "ra_vetoed": false,
+  "ra_veto_streak": 0,
+  "authority_source": "c3_rule",
+  "timestamp_ms": 1787548800000
+}

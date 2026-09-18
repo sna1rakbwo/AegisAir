@@ -1,0 +1,23 @@
+services:
+  mqtt:
+    image: eclipse-mosquitto:2.0.20
+    command: ["mosquitto", "-c", "/mosquitto-no-auth.conf"]
+    ports: ["1883:1883"]
+    volumes:
+      - ./docker/mosquitto-no-auth.conf:/mosquitto-no-auth.conf:ro
+
+  bridge:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.bridge
+    depends_on: [mqtt]
+    environment:
+      XRCE_UDP_PORT: "8889"
+      MQTT_HOST: mqtt
+      MQTT_PORT: "1883"
+      ADAPTER_INSTANCES: "${ADAPTER_INSTANCES:-2 3}"
+      ORIGIN_OFFSET_2: "${ORIGIN_OFFSET_2:--3,0,0}"
+      ORIGIN_OFFSET_3: "${ORIGIN_OFFSET_3:-3,0,0}"
+      ORIGIN_OFFSET_4: "${ORIGIN_OFFSET_4:--3,-3,0}"
+      ORIGIN_OFFSET_5: "${ORIGIN_OFFSET_5:-3,3,0}"
+    ports: ["8889:8889/udp"]

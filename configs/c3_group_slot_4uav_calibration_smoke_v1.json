@@ -1,0 +1,54 @@
+{
+  "protocol_id": "aegisair-c3-group-slot-4uav-calibration-smoke-v2",
+  "phase": "independent_moderate_density_calibration_not_sealed_evidence",
+  "gazebo_seed": 9901,
+  "rate_hz": 20.0,
+  "max_steps": 1200,
+  "goal_epsilon": 0.5,
+  "execution_tau_s": 0.7,
+  "drone_ids": [2, 3, 4, 5],
+  "scenario_id": "four_uav_moderate_density_grouped_corridor_crossing",
+  "reset_starts": {
+    "2": [-3.0, 0.8, 2.5],
+    "3": [3.0, -0.8, 2.5],
+    "4": [-3.0, -3.0, 2.5],
+    "5": [3.0, 3.0, 2.5]
+  },
+  "base_goals": {
+    "2": [3.0, 0.8, 2.5],
+    "3": [-3.0, -0.8, 2.5],
+    "4": [3.0, -3.0, 2.5],
+    "5": [-3.0, 3.0, 2.5]
+  },
+  "c3_group_slot": {
+    "conflict_zone_id": "grouped_corridor_center",
+    "conflict_zone_center": [0.0, 0.0],
+    "group_order": [[2, 3], [4, 5]],
+    "position_epsilon_m": 0.35,
+    "speed_epsilon_mps": 0.15,
+    "settle_steps": 5,
+    "transit_scale": 0.8,
+    "terminal_semantics": "unoccupied_distinct_goals_no_service_clear_or_final_return",
+    "compatibility_rule": "第一组在y=+/-0.8的近邻走廊通行；第二组在y=+/-3.0的外侧走廊通行。冻结等待点与第一组起点的最近间距为3.8m，两个组不重叠。"
+  },
+  "method": "AEGIS_HOCBF_V4",
+  "method_config": {
+    "constraint_boundary": "full",
+    "k1": 4.0,
+    "k2": 4.0,
+    "boundary_guard": 1.0,
+    "boundary_buffer_m": 0.3,
+    "barrier_model_tau_s": 0.7,
+    "predictive_recovery": true,
+    "prediction_execution_fraction": 0.0,
+    "prediction_steps": 3,
+    "recovery_reserve_threshold": 1.0,
+    "recovery_alpha": 0.5,
+    "recovery_braking_accel_mps2": 2.0,
+    "recovery_boundary_buffer_m": 0.3,
+    "recovery_clear_steps": 5
+  },
+  "calibration_go_criteria": "四机必须在1200步内完成，两个冻结双机组均实际授权；collision=0、min_rho>0、selected QP infeasible=0、RA bypass=0、冻结等待点不漂移、授权组只能为[2,3]或[4,5]；RA P99<50ms且deadline miss率<1%。",
+  "stopping_rule": "本次只运行一个开发smoke。算法门失败即No-Go，不调参重跑；纯启动、日志或接口实现错误可以修复并保留无效记录。smoke通过只允许进入五seed qualification。",
+  "claim_boundary": "本实验检验四机中等密度、未占用终点的分组走廊闭环扩展，不检验中心终点交换、服务锁存或一般化多机活性；不改变极端四机终点交换的历史No-Go，也不降低RA或安全阈值。"
+}

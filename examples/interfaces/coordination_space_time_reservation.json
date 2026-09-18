@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "step": 120,
+  "coordination_mode": "pass",
+  "admission_triggers": ["conflict_zone", "predicted_rho_low"],
+  "authorized_drone_ids": [2],
+  "held_drone_ids": [3, 4, 5],
+  "frozen_hold_goals": {
+    "3": [4.5, -1.1, 2.5],
+    "4": [-4.5, -1.1, 2.5],
+    "5": [4.5, 1.1, 2.5]
+  },
+  "committed_waypoints": {
+    "2": [[3.0, -0.8, 2.5], [3.0, -3.0, 2.5]]
+  },
+  "reservation_windows": [
+    {
+      "slot_id": "service-00-uav2",
+      "phase": "service",
+      "drone_ids": [2],
+      "planned_open_step": 100,
+      "planned_close_step": 299,
+      "actual_open_step": 120,
+      "status": "open",
+      "delay_steps": 0
+    }
+  ],
+  "active_slot_id": "service-00-uav2",
+  "service_latched_drone_ids": [],
+  "cleared_drone_ids": [],
+  "final_returned_drone_ids": [],
+  "conflict_zone_id": "crossing_center",
+  "ra_vetoed": false,
+  "ra_veto_streak": 0,
+  "schedule_revision": 0,
+  "total_delay_steps": 0,
+  "authority_source": "c3_rule",
+  "timestamp_ms": 1
+}

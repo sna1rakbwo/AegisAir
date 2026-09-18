@@ -1,0 +1,215 @@
+{
+  "$defs": {
+    "NeighborObservation": {
+      "additionalProperties": false,
+      "description": "Relative state of one other UAV.",
+      "properties": {
+        "agent_id": {
+          "minimum": 0,
+          "title": "Agent Id",
+          "type": "integer"
+        },
+        "relative_position": {
+          "description": "p_j - p_i in FLU",
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Relative Position",
+          "type": "array"
+        },
+        "relative_velocity": {
+          "description": "v_j - v_i in FLU",
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Relative Velocity",
+          "type": "array"
+        },
+        "distance": {
+          "minimum": 0.0,
+          "title": "Distance",
+          "type": "number"
+        },
+        "closing_speed": {
+          "description": "Non-negative closing speed",
+          "minimum": 0.0,
+          "title": "Closing Speed",
+          "type": "number"
+        }
+      },
+      "required": [
+        "agent_id",
+        "relative_position",
+        "relative_velocity",
+        "distance",
+        "closing_speed"
+      ],
+      "title": "NeighborObservation",
+      "type": "object"
+    },
+    "PerceptionMeta": {
+      "additionalProperties": false,
+      "description": "Optional perception-quality metadata carried alongside an observation.",
+      "properties": {
+        "noise_std_m": {
+          "description": "Perceived position noise std in meters",
+          "minimum": 0.0,
+          "title": "Noise Std M",
+          "type": "number"
+        },
+        "staleness_ms": {
+          "description": "Age of the perceived state in milliseconds",
+          "minimum": 0,
+          "title": "Staleness Ms",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "noise_std_m",
+        "staleness_ms"
+      ],
+      "title": "PerceptionMeta",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "MARL observation for one agent.\n\nSelf velocity is absolute; goal and neighbors are relative quantities, as\nspecified by the plan's ``o_i = [v_i, p_goal-p_i, p_j-p_i, v_j-v_i, ...]``.",
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "agent_id": {
+      "minimum": 0,
+      "title": "Agent Id",
+      "type": "integer"
+    },
+    "position_flu": {
+      "description": "Self FLU position (for logging/debug)",
+      "maxItems": 3,
+      "minItems": 3,
+      "prefixItems": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        }
+      ],
+      "title": "Position Flu",
+      "type": "array"
+    },
+    "velocity_flu": {
+      "description": "Self FLU velocity v_i",
+      "maxItems": 3,
+      "minItems": 3,
+      "prefixItems": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        }
+      ],
+      "title": "Velocity Flu",
+      "type": "array"
+    },
+    "goal_relative": {
+      "description": "p_goal - p_i in FLU",
+      "maxItems": 3,
+      "minItems": 3,
+      "prefixItems": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        }
+      ],
+      "title": "Goal Relative",
+      "type": "array"
+    },
+    "goal_distance": {
+      "minimum": 0.0,
+      "title": "Goal Distance",
+      "type": "number"
+    },
+    "neighbors": {
+      "items": {
+        "$ref": "#/$defs/NeighborObservation"
+      },
+      "title": "Neighbors",
+      "type": "array"
+    },
+    "role": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional semantic role encoding",
+      "title": "Role"
+    },
+    "perception": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PerceptionMeta"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "timestamp_ms": {
+      "minimum": 0,
+      "title": "Timestamp Ms",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "agent_id",
+    "position_flu",
+    "velocity_flu",
+    "goal_relative",
+    "goal_distance",
+    "timestamp_ms"
+  ],
+  "title": "Observation",
+  "type": "object"
+}

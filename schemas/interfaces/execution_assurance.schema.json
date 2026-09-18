@@ -1,0 +1,177 @@
+{
+  "$defs": {
+    "ExecutionResidualRecord": {
+      "additionalProperties": false,
+      "description": "One UAV's one-step execution-model residual.",
+      "properties": {
+        "dt_s": {
+          "exclusiveMinimum": 0.0,
+          "title": "Dt S",
+          "type": "number"
+        },
+        "velocity_mps": {
+          "minimum": 0.0,
+          "title": "Velocity Mps",
+          "type": "number"
+        },
+        "position_m": {
+          "minimum": 0.0,
+          "title": "Position M",
+          "type": "number"
+        }
+      },
+      "required": [
+        "dt_s",
+        "velocity_mps",
+        "position_m"
+      ],
+      "title": "ExecutionResidualRecord",
+      "type": "object"
+    },
+    "RecoverabilityPairRecord": {
+      "additionalProperties": false,
+      "description": "Frozen pairwise stopping-distance reserve reported by C2 predictive gate.",
+      "properties": {
+        "drones": {
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "integer"
+            }
+          ],
+          "title": "Drones",
+          "type": "array"
+        },
+        "separation_m": {
+          "minimum": 0.0,
+          "title": "Separation M",
+          "type": "number"
+        },
+        "closing_speed_mps": {
+          "minimum": 0.0,
+          "title": "Closing Speed Mps",
+          "type": "number"
+        },
+        "required_distance_m": {
+          "minimum": 0.0,
+          "title": "Required Distance M",
+          "type": "number"
+        },
+        "margin_m": {
+          "title": "Margin M",
+          "type": "number"
+        }
+      },
+      "required": [
+        "drones",
+        "separation_m",
+        "closing_speed_mps",
+        "required_distance_m",
+        "margin_m"
+      ],
+      "title": "RecoverabilityPairRecord",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Frozen C2-prime monitor/switch decision for one control cycle.",
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "active": {
+      "description": "Whether deterministic backup owns control",
+      "title": "Active",
+      "type": "boolean"
+    },
+    "reasons": {
+      "items": {
+        "enum": [
+          "NO_HISTORY",
+          "MODEL_CONFORMANT",
+          "VELOCITY_RESIDUAL",
+          "POSITION_RESIDUAL",
+          "QP_INFEASIBLE",
+          "SOLVE_DEADLINE",
+          "TELEMETRY_STALE",
+          "PREDICTIVE_RECOVERABILITY",
+          "HYSTERESIS_HOLD"
+        ],
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Reasons",
+      "type": "array"
+    },
+    "residuals": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ExecutionResidualRecord"
+      },
+      "title": "Residuals",
+      "type": "object"
+    },
+    "recoverability": {
+      "items": {
+        "$ref": "#/$defs/RecoverabilityPairRecord"
+      },
+      "title": "Recoverability",
+      "type": "array"
+    },
+    "backup_drones": {
+      "items": {
+        "type": "integer"
+      },
+      "title": "Backup Drones",
+      "type": "array"
+    },
+    "qp_feasible": {
+      "title": "Qp Feasible",
+      "type": "boolean"
+    },
+    "solve_elapsed_s": {
+      "minimum": 0.0,
+      "title": "Solve Elapsed S",
+      "type": "number"
+    },
+    "telemetry_ages_s": {
+      "additionalProperties": {
+        "type": "number"
+      },
+      "title": "Telemetry Ages S",
+      "type": "object"
+    },
+    "consecutive_bad": {
+      "minimum": 0,
+      "title": "Consecutive Bad",
+      "type": "integer"
+    },
+    "consecutive_clean": {
+      "minimum": 0,
+      "title": "Consecutive Clean",
+      "type": "integer"
+    },
+    "timestamp_ms": {
+      "minimum": 0,
+      "title": "Timestamp Ms",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "active",
+    "reasons",
+    "qp_feasible",
+    "solve_elapsed_s",
+    "consecutive_bad",
+    "consecutive_clean",
+    "timestamp_ms"
+  ],
+  "title": "ExecutionAssuranceDecision",
+  "type": "object"
+}

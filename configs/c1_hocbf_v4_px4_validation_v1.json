@@ -1,0 +1,68 @@
+{
+  "protocol_id": "aegisair-c1-hocbf-v4-px4-validation-v1",
+  "phase": "sealed_paired_validation",
+  "frozen_from": "archived_prevalidation_audit_not_public",
+  "rate_hz": 20.0,
+  "max_steps": 400,
+  "goal_epsilon": 0.5,
+  "execution_tau_s": 0.70,
+  "drone_ids": [2, 3],
+  "base_goals": {"2": [4.0, -0.5, 2.5], "3": [-4.0, 0.5, 2.5]},
+  "reset_starts": {"2": [-4.0, 0.5, 2.5], "3": [4.0, -0.5, 2.5]},
+  "methods": {
+    "AEGIS_HOCBF_V4": {
+      "constraint_boundary": "full", "k1": 4.0, "k2": 4.0,
+      "boundary_guard": 1.0, "boundary_buffer_m": 0.30,
+      "barrier_model_tau_s": 0.70, "predictive_recovery": true,
+      "prediction_execution_fraction": 0.0, "prediction_steps": 3,
+      "recovery_reserve_threshold": 1.0,
+      "recovery_alpha": 0.5, "recovery_braking_accel_mps2": 2.0,
+      "recovery_boundary_buffer_m": 0.30, "recovery_clear_steps": 5
+    },
+    "AEGIS_HOCBF_V4_REACTIVE": {
+      "constraint_boundary": "full", "k1": 4.0, "k2": 4.0,
+      "boundary_guard": 1.0, "boundary_buffer_m": 0.30,
+      "barrier_model_tau_s": 0.70, "predictive_recovery": false,
+      "recovery_alpha": 0.5, "recovery_braking_accel_mps2": 2.0,
+      "recovery_boundary_buffer_m": 0.30, "recovery_clear_steps": 5
+    },
+    "AEGIS_HOCBF_V3": {
+      "constraint_boundary": "full", "k1": 4.0, "k2": 4.0,
+      "boundary_guard": 1.0, "boundary_buffer_m": 0.30,
+      "barrier_model_tau_s": 0.70, "infeasible_fallback": "max_brake"
+    },
+    "PB_CBF": {
+      "constraint_boundary": "static", "alpha": 0.5,
+      "braking_accel_mps2": 2.0, "boundary_buffer_m": 0.30,
+      "infeasible_fallback": "max_brake"
+    }
+  },
+  "trials": [
+    {"trial_id": "v4val01", "seed": 8901, "condition_order": ["AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V3", "PB_CBF"]},
+    {"trial_id": "v4val02", "seed": 8902, "condition_order": ["AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V3", "PB_CBF", "AEGIS_HOCBF_V4"]},
+    {"trial_id": "v4val03", "seed": 8903, "condition_order": ["AEGIS_HOCBF_V3", "PB_CBF", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE"]},
+    {"trial_id": "v4val04", "seed": 8904, "condition_order": ["PB_CBF", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V3"]},
+    {"trial_id": "v4val05", "seed": 8905, "condition_order": ["AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V3", "PB_CBF"]},
+    {"trial_id": "v4val06", "seed": 8906, "condition_order": ["AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V3", "PB_CBF", "AEGIS_HOCBF_V4"]},
+    {"trial_id": "v4val07", "seed": 8907, "condition_order": ["AEGIS_HOCBF_V3", "PB_CBF", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE"]},
+    {"trial_id": "v4val08", "seed": 8908, "condition_order": ["PB_CBF", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V3"]},
+    {"trial_id": "v4val09", "seed": 8909, "condition_order": ["AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V3", "PB_CBF"]},
+    {"trial_id": "v4val10", "seed": 8910, "condition_order": ["AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V3", "PB_CBF", "AEGIS_HOCBF_V4"]},
+    {"trial_id": "v4val11", "seed": 8911, "condition_order": ["AEGIS_HOCBF_V3", "PB_CBF", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE"]},
+    {"trial_id": "v4val12", "seed": 8912, "condition_order": ["PB_CBF", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V3"]},
+    {"trial_id": "v4val13", "seed": 8913, "condition_order": ["AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V3", "PB_CBF"]},
+    {"trial_id": "v4val14", "seed": 8914, "condition_order": ["AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V3", "PB_CBF", "AEGIS_HOCBF_V4"]},
+    {"trial_id": "v4val15", "seed": 8915, "condition_order": ["AEGIS_HOCBF_V3", "PB_CBF", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE"]},
+    {"trial_id": "v4val16", "seed": 8916, "condition_order": ["PB_CBF", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V3"]},
+    {"trial_id": "v4val17", "seed": 8917, "condition_order": ["AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V3", "PB_CBF"]},
+    {"trial_id": "v4val18", "seed": 8918, "condition_order": ["AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V3", "PB_CBF", "AEGIS_HOCBF_V4"]},
+    {"trial_id": "v4val19", "seed": 8919, "condition_order": ["AEGIS_HOCBF_V3", "PB_CBF", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE"]},
+    {"trial_id": "v4val20", "seed": 8920, "condition_order": ["PB_CBF", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V3"]}
+  ],
+  "go_criteria": {
+    "absolute": "每一条件 20/20 mission_complete、collision=0、min_rho>0",
+    "v4_mechanism": "完整 v4 的 selected QP infeasible=0；每一 trial 首次 PB recovery 必须在 primary HOCBF infeasible 前由 feasibility_reserve_low 触发",
+    "comparative": "预先报告 v4 相对 v3、reactive、PB-only 的 paired delta 与 bootstrap CI；不以 sealed 结果修改参数"
+  },
+  "stopping_rule": "任一物理 trial collision、未完成或 min_rho<=0 时，停止未运行的 sealed trial；不调参数、不追加 seed。"
+}

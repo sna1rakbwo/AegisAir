@@ -1,0 +1,49 @@
+{
+  "protocol_id": "aegisair-c1-hocbf-v4-ablation-sealed-v1",
+  "phase": "sealed_paired_ablation",
+  "created_after": "c1_hocbf_v4_px4_validation_v1",
+  "rate_hz": 20.0,
+  "max_steps": 400,
+  "goal_epsilon": 0.5,
+  "execution_tau_s": 0.70,
+  "drone_ids": [2, 3],
+  "base_goals": {"2": [4.0, -0.5, 2.5], "3": [-4.0, 0.5, 2.5]},
+  "reset_starts": {"2": [-4.0, 0.5, 2.5], "3": [4.0, -0.5, 2.5]},
+  "methods": {
+    "AEGIS_HOCBF_V3": {"role": "HOCBF-Fallback", "constraint_boundary": "full", "k1": 4.0, "k2": 4.0, "boundary_guard": 1.0, "boundary_buffer_m": 0.30, "barrier_model_tau_s": 0.70, "infeasible_fallback": "max_brake"},
+    "AEGIS_HOCBF_V4_REACTIVE": {"role": "Reactive PB Takeover", "constraint_boundary": "full", "k1": 4.0, "k2": 4.0, "boundary_guard": 1.0, "boundary_buffer_m": 0.30, "barrier_model_tau_s": 0.70, "predictive_recovery": false, "recovery_alpha": 0.5, "recovery_braking_accel_mps2": 2.0, "recovery_boundary_buffer_m": 0.30, "recovery_clear_steps": 5},
+    "AEGIS_HOCBF_V4_RESERVE_ONLY": {"role": "Reserve-Only Takeover", "constraint_boundary": "full", "k1": 4.0, "k2": 4.0, "boundary_guard": 1.0, "boundary_buffer_m": 0.30, "barrier_model_tau_s": 0.70, "predictive_recovery": false, "recovery_reserve_threshold": 1.0, "recovery_alpha": 0.5, "recovery_braking_accel_mps2": 2.0, "recovery_boundary_buffer_m": 0.30, "recovery_clear_steps": 5},
+    "AEGIS_HOCBF_V4": {"role": "Full Hybrid RA", "constraint_boundary": "full", "k1": 4.0, "k2": 4.0, "boundary_guard": 1.0, "boundary_buffer_m": 0.30, "barrier_model_tau_s": 0.70, "predictive_recovery": true, "prediction_execution_fraction": 0.0, "prediction_steps": 3, "recovery_reserve_threshold": 1.0, "recovery_alpha": 0.5, "recovery_braking_accel_mps2": 2.0, "recovery_boundary_buffer_m": 0.30, "recovery_clear_steps": 5}
+  },
+  "comparisons": [
+    ["AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_RESERVE_ONLY", "prediction increment"],
+    ["AEGIS_HOCBF_V4_RESERVE_ONLY", "AEGIS_HOCBF_V4_REACTIVE", "reserve increment"],
+    ["AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V3", "PB takeover increment"]
+  ],
+  "trials": [
+    {"trial_id": "abl01", "seed": 9601, "condition_order": ["AEGIS_HOCBF_V3", "AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V4_RESERVE_ONLY", "AEGIS_HOCBF_V4"]},
+    {"trial_id": "abl02", "seed": 9602, "condition_order": ["AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V4_RESERVE_ONLY", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V3"]},
+    {"trial_id": "abl03", "seed": 9603, "condition_order": ["AEGIS_HOCBF_V4_RESERVE_ONLY", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V3", "AEGIS_HOCBF_V4_REACTIVE"]},
+    {"trial_id": "abl04", "seed": 9604, "condition_order": ["AEGIS_HOCBF_V4", "AEGIS_HOCBF_V3", "AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V4_RESERVE_ONLY"]},
+    {"trial_id": "abl05", "seed": 9605, "condition_order": ["AEGIS_HOCBF_V3", "AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V4_RESERVE_ONLY", "AEGIS_HOCBF_V4"]},
+    {"trial_id": "abl06", "seed": 9606, "condition_order": ["AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V4_RESERVE_ONLY", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V3"]},
+    {"trial_id": "abl07", "seed": 9607, "condition_order": ["AEGIS_HOCBF_V4_RESERVE_ONLY", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V3", "AEGIS_HOCBF_V4_REACTIVE"]},
+    {"trial_id": "abl08", "seed": 9608, "condition_order": ["AEGIS_HOCBF_V4", "AEGIS_HOCBF_V3", "AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V4_RESERVE_ONLY"]},
+    {"trial_id": "abl09", "seed": 9609, "condition_order": ["AEGIS_HOCBF_V3", "AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V4_RESERVE_ONLY", "AEGIS_HOCBF_V4"]},
+    {"trial_id": "abl10", "seed": 9610, "condition_order": ["AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V4_RESERVE_ONLY", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V3"]},
+    {"trial_id": "abl11", "seed": 9611, "condition_order": ["AEGIS_HOCBF_V4_RESERVE_ONLY", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V3", "AEGIS_HOCBF_V4_REACTIVE"]},
+    {"trial_id": "abl12", "seed": 9612, "condition_order": ["AEGIS_HOCBF_V4", "AEGIS_HOCBF_V3", "AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V4_RESERVE_ONLY"]},
+    {"trial_id": "abl13", "seed": 9613, "condition_order": ["AEGIS_HOCBF_V3", "AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V4_RESERVE_ONLY", "AEGIS_HOCBF_V4"]},
+    {"trial_id": "abl14", "seed": 9614, "condition_order": ["AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V4_RESERVE_ONLY", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V3"]},
+    {"trial_id": "abl15", "seed": 9615, "condition_order": ["AEGIS_HOCBF_V4_RESERVE_ONLY", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V3", "AEGIS_HOCBF_V4_REACTIVE"]},
+    {"trial_id": "abl16", "seed": 9616, "condition_order": ["AEGIS_HOCBF_V4", "AEGIS_HOCBF_V3", "AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V4_RESERVE_ONLY"]},
+    {"trial_id": "abl17", "seed": 9617, "condition_order": ["AEGIS_HOCBF_V3", "AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V4_RESERVE_ONLY", "AEGIS_HOCBF_V4"]},
+    {"trial_id": "abl18", "seed": 9618, "condition_order": ["AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V4_RESERVE_ONLY", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V3"]},
+    {"trial_id": "abl19", "seed": 9619, "condition_order": ["AEGIS_HOCBF_V4_RESERVE_ONLY", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V3", "AEGIS_HOCBF_V4_REACTIVE"]},
+    {"trial_id": "abl20", "seed": 9620, "condition_order": ["AEGIS_HOCBF_V4", "AEGIS_HOCBF_V3", "AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V4_RESERVE_ONLY"]}
+  ],
+  "primary_endpoints": ["qp_infeasible_steps", "first_takeover_lead_steps", "mean_control_effort"],
+  "safety_gate": "每个有效 trial 的 collision=0、min_rho>0、RA bypass=0；任一有效失败后，完成该 paired trial 的其余条件，停止未开始 seed；不调参、不换 seed、不延长 horizon。",
+  "analysis": "以 trial 为独立单位；每个预注册连续比较报告 seed-level paired bootstrap 95% CI，并对三项连续比较使用 Holm 校正；二分类配对结局使用 exact McNemar；保留所有阴性结果、invalid start 和最大时延。",
+  "output_root": "archived_experiment_output_not_public"
+}

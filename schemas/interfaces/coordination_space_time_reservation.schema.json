@@ -1,0 +1,276 @@
+{
+  "$defs": {
+    "SpaceTimeReservationWindow": {
+      "additionalProperties": false,
+      "description": "One auditable mission-layer time window; it is not an actuator command.",
+      "properties": {
+        "slot_id": {
+          "minLength": 1,
+          "title": "Slot Id",
+          "type": "string"
+        },
+        "phase": {
+          "enum": [
+            "service",
+            "final_return"
+          ],
+          "title": "Phase",
+          "type": "string"
+        },
+        "drone_ids": {
+          "items": {
+            "type": "integer"
+          },
+          "minItems": 1,
+          "title": "Drone Ids",
+          "type": "array"
+        },
+        "planned_open_step": {
+          "minimum": 0,
+          "title": "Planned Open Step",
+          "type": "integer"
+        },
+        "planned_close_step": {
+          "minimum": 0,
+          "title": "Planned Close Step",
+          "type": "integer"
+        },
+        "actual_open_step": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Actual Open Step"
+        },
+        "status": {
+          "enum": [
+            "scheduled",
+            "open",
+            "delayed",
+            "completed"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "delay_steps": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Delay Steps",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "slot_id",
+        "phase",
+        "drone_ids",
+        "planned_open_step",
+        "planned_close_step",
+        "status"
+      ],
+      "title": "SpaceTimeReservationWindow",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Frozen C3-STR schedule decision; Runtime Assurance remains final authority.",
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "step": {
+      "minimum": 0,
+      "title": "Step",
+      "type": "integer"
+    },
+    "coordination_mode": {
+      "enum": [
+        "normal",
+        "admission_pending",
+        "staging",
+        "pass",
+        "clear",
+        "release",
+        "final_return",
+        "slot_wait",
+        "slot_delay",
+        "complete"
+      ],
+      "title": "Coordination Mode",
+      "type": "string"
+    },
+    "admission_triggers": {
+      "items": {
+        "enum": [
+          "conflict_zone",
+          "reserve_low",
+          "predicted_rho_low"
+        ],
+        "type": "string"
+      },
+      "title": "Admission Triggers",
+      "type": "array"
+    },
+    "authorized_drone_ids": {
+      "items": {
+        "type": "integer"
+      },
+      "title": "Authorized Drone Ids",
+      "type": "array"
+    },
+    "held_drone_ids": {
+      "items": {
+        "type": "integer"
+      },
+      "title": "Held Drone Ids",
+      "type": "array"
+    },
+    "frozen_hold_goals": {
+      "additionalProperties": {
+        "maxItems": 3,
+        "minItems": 3,
+        "prefixItems": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "number"
+          }
+        ],
+        "type": "array"
+      },
+      "title": "Frozen Hold Goals",
+      "type": "object"
+    },
+    "committed_waypoints": {
+      "additionalProperties": {
+        "items": {
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "type": "array"
+        },
+        "type": "array"
+      },
+      "title": "Committed Waypoints",
+      "type": "object"
+    },
+    "reservation_windows": {
+      "items": {
+        "$ref": "#/$defs/SpaceTimeReservationWindow"
+      },
+      "title": "Reservation Windows",
+      "type": "array"
+    },
+    "active_slot_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Active Slot Id"
+    },
+    "service_latched_drone_ids": {
+      "items": {
+        "type": "integer"
+      },
+      "title": "Service Latched Drone Ids",
+      "type": "array"
+    },
+    "cleared_drone_ids": {
+      "items": {
+        "type": "integer"
+      },
+      "title": "Cleared Drone Ids",
+      "type": "array"
+    },
+    "final_returned_drone_ids": {
+      "items": {
+        "type": "integer"
+      },
+      "title": "Final Returned Drone Ids",
+      "type": "array"
+    },
+    "conflict_zone_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Conflict Zone Id"
+    },
+    "ra_vetoed": {
+      "default": false,
+      "title": "Ra Vetoed",
+      "type": "boolean"
+    },
+    "ra_veto_streak": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Ra Veto Streak",
+      "type": "integer"
+    },
+    "schedule_revision": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Schedule Revision",
+      "type": "integer"
+    },
+    "total_delay_steps": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Total Delay Steps",
+      "type": "integer"
+    },
+    "authority_source": {
+      "enum": [
+        "c3_rule",
+        "fallback"
+      ],
+      "title": "Authority Source",
+      "type": "string"
+    },
+    "timestamp_ms": {
+      "minimum": 0,
+      "title": "Timestamp Ms",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "step",
+    "coordination_mode",
+    "authority_source",
+    "timestamp_ms"
+  ],
+  "title": "CoordinationSpaceTimeReservationDecision",
+  "type": "object"
+}

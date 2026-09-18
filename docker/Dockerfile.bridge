@@ -1,0 +1,28 @@
+# Public ROS 2/PX4 bridge image for the AegisAir paper experiments.
+# It is built entirely from public pinned upstream sources.
+FROM ros:humble-ros-base-jammy
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    build-essential cmake git python3-colcon-common-extensions python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git clone https://github.com/eProsima/Micro-XRCE-DDS-Agent.git /opt/Micro-XRCE-DDS-Agent \
+    && cd /opt/Micro-XRCE-DDS-Agent \
+    && git checkout 57d086216d01ec43121845d385894a25987f8a2c \
+    && cmake -S . -B build -DUAGENT_SUPERBUILD=OFF -DUAGENT_USE_SYSTEM_FASTDDS=ON \
+      -DUAGENT_USE_SYSTEM_FASTCDR=ON -DUAGENT_USE_SYSTEM_LOGGER=ON \
+      -DUAGENT_P2P_PROFILE=OFF -DUAGENT_SOCKETCAN_PROFILE=OFF \
+    && cmake --build build -j"$(nproc)" && cmake --install build && ldconfig
+
+RUN mkdir -p /opt/ros_ws/src \
+    && git clone https://github.com/PX4/px4_msgs.git /opt/ros_ws/src/px4_msgs \
+    && cd /opt/ros_ws/src/px4_msgs \
+    && git checkout 392e831c1f659429ca83902e66820d7094591410 \
+    && source /opt/ros/humble/setup.bash \
+    && cd /opt/ros_ws && colcon build --packages-select px4_msgs
+
+COPY px4_adapter /work/px4_adapter
+COPY docker/bridge_entrypoint.sh /usr/local/bin/bridge_entrypoint.sh
+RUN pip3 install --no-cache-dir paho-mqtt PyYAML && chmod +x /usr/local/bin/bridge_entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/bridge_entrypoint.sh"]

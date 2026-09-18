@@ -1,0 +1,148 @@
+{
+  "additionalProperties": false,
+  "description": "Structured event emitted by Runtime Assurance to the semantic layer.",
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "event": {
+      "enum": [
+        "PREDICTED_CONFLICT",
+        "SAFETY_MARGIN_DEGRADATION",
+        "HARD_INTERVENTION",
+        "REPEATED_ROUTE_CONFLICT",
+        "MISSION_PLAN_INVALIDATED"
+      ],
+      "title": "Event",
+      "type": "string"
+    },
+    "agent_i": {
+      "minimum": 0,
+      "title": "Agent I",
+      "type": "integer"
+    },
+    "agent_j": {
+      "minimum": 0,
+      "title": "Agent J",
+      "type": "integer"
+    },
+    "current_margin": {
+      "description": "Normalized safety margin rho at capture time",
+      "title": "Current Margin",
+      "type": "number"
+    },
+    "predicted_min_margin": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Worst predicted rho over the horizon (proactive only)",
+      "title": "Predicted Min Margin"
+    },
+    "time_to_min_margin_s": {
+      "anyOf": [
+        {
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Seconds until predicted minimum margin",
+      "title": "Time To Min Margin S"
+    },
+    "margin_degradation": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Safety-margin degradation rate g (reactive only)",
+      "title": "Margin Degradation"
+    },
+    "intervention_count": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Intervention Count"
+    },
+    "mission_priority": {
+      "anyOf": [
+        {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional mission-level priority map for a conflicting pair",
+      "title": "Mission Priority"
+    },
+    "cause": {
+      "enum": [
+        "DYNAMICS",
+        "PERCEPTION_UNCERTAINTY",
+        "COMMUNICATION_STALE",
+        "TRAJECTORY_CONFLICT",
+        "REPEATED_CONFLICT",
+        "ROUTE_DEVIATION",
+        "MISSION_CHANGE",
+        "COORDINATION_DEGRADATION",
+        "UNKNOWN"
+      ],
+      "title": "Cause",
+      "type": "string"
+    },
+    "severity": {
+      "enum": [
+        "LOW",
+        "MEDIUM",
+        "HIGH",
+        "CRITICAL"
+      ],
+      "title": "Severity",
+      "type": "string"
+    },
+    "timestamp_ms": {
+      "minimum": 0,
+      "title": "Timestamp Ms",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "event",
+    "agent_i",
+    "agent_j",
+    "current_margin",
+    "cause",
+    "severity",
+    "timestamp_ms"
+  ],
+  "title": "RiskEvent",
+  "type": "object"
+}

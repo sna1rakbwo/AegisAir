@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "drone": 2,
+  "mode": "override",
+  "nominal_action": [1.0, 0.0],
+  "safe_action": [0.0, -0.8],
+  "safety_margin": 0.21,
+  "predicted_margin": -0.18,
+  "reason": "collision_risk_exceeded",
+  "timestamp_ms": 1786728517875
+}

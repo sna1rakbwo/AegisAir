@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "active": true,
+  "reasons": ["PREDICTIVE_RECOVERABILITY"],
+  "residuals": {
+    "2": {
+      "dt_s": 0.05,
+      "velocity_mps": 0.21,
+      "position_m": 0.03
+    }
+  },
+  "recoverability": [
+    {
+      "drones": [2, 3],
+      "separation_m": 4.0,
+      "closing_speed_mps": 3.0,
+      "required_distance_m": 4.95,
+      "margin_m": -0.95
+    }
+  ],
+  "backup_drones": [3],
+  "qp_feasible": true,
+  "solve_elapsed_s": 0.004,
+  "telemetry_ages_s": {
+    "2": 0.01
+  },
+  "consecutive_bad": 2,
+  "consecutive_clean": 0,
+  "timestamp_ms": 1
+}

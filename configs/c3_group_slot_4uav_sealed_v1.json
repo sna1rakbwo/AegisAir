@@ -1,0 +1,37 @@
+{
+  "protocol_id": "aegisair-c3-group-slot-4uav-sealed-v1",
+  "phase": "twenty_seed_sealed_statistical_validation",
+  "parent_qualification": "archived_qualification_summary_not_public",
+  "sealed_seeds": [10001,10002,10003,10004,10005,10006,10007,10008,10009,10010,10011,10012,10013,10014,10015,10016,10017,10018,10019,10020],
+  "max_invalid_attempts_per_seed": 3,
+  "rate_hz": 20.0,
+  "max_steps": 1200,
+  "goal_epsilon": 0.5,
+  "execution_tau_s": 0.7,
+  "drone_ids": [2,3,4,5],
+  "scenario_id": "four_uav_moderate_density_grouped_corridor_crossing",
+  "reset_starts": {"2":[-3.0,0.8,2.5],"3":[3.0,-0.8,2.5],"4":[-3.0,-3.0,2.5],"5":[3.0,3.0,2.5]},
+  "base_goals": {"2":[3.0,0.8,2.5],"3":[-3.0,-0.8,2.5],"4":[3.0,-3.0,2.5],"5":[-3.0,3.0,2.5]},
+  "c3_group_slot": {
+    "conflict_zone_id": "grouped_corridor_center",
+    "conflict_zone_center": [0.0,0.0],
+    "group_order": [[2,3],[4,5]],
+    "position_epsilon_m": 0.35,
+    "speed_epsilon_mps": 0.15,
+    "settle_steps": 5,
+    "transit_scale": 0.8,
+    "terminal_semantics": "unoccupied_distinct_goals_no_service_clear_or_final_return",
+    "compatibility_rule": "第一组在y=+/-0.8的近邻走廊通行；第二组在y=+/-3.0的外侧走廊通行。"
+  },
+  "method": "AEGIS_HOCBF_V4",
+  "method_config": {
+    "constraint_boundary":"full","k1":4.0,"k2":4.0,"boundary_guard":1.0,
+    "boundary_buffer_m":0.3,"barrier_model_tau_s":0.7,"predictive_recovery":true,
+    "prediction_execution_fraction":0.0,"prediction_steps":3,"recovery_reserve_threshold":1.0,
+    "recovery_alpha":0.5,"recovery_braking_accel_mps2":2.0,
+    "recovery_boundary_buffer_m":0.3,"recovery_clear_steps":5
+  },
+  "sealed_go_criteria": "20个有效trial全部完成、collision=0、min_rho>0、QP不可行=0、RA bypass=0、等待点冻结、两组授权、P99<50ms且deadline miss率<1%。",
+  "stopping_rule": "任一有效trial失败立即停止并保留No-Go；无效启动每seed最多三次；不得调参、换seed、延长时域或根据中途结果扩样。",
+  "claim_boundary": "只检验冻结的四机中等密度分组走廊闭环扩展；不检验极端终点交换、一般化四机安全或学习策略贡献。"
+}

@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "step": 12,
+  "coordination_mode": "pass",
+  "admission_triggers": [
+    "conflict_zone",
+    "predicted_rho_low"
+  ],
+  "authorized_drone_ids": [2],
+  "held_drone_ids": [3, 4, 5],
+  "frozen_hold_goals": {
+    "3": [4.2, -1.1, 2.5],
+    "4": [-4.2, -1.1, 2.5],
+    "5": [4.2, 1.1, 2.5]
+  },
+  "hold_enter_steps": {
+    "3": 10,
+    "4": 10,
+    "5": 10
+  },
+  "conflict_zone_id": "crossing_center",
+  "ra_vetoed": false,
+  "authority_source": "c3_rule",
+  "timestamp_ms": 1787548800000
+}

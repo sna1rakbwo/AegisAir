@@ -1,0 +1,16 @@
+{
+  "protocol_id": "safedrones-px4-adapter-p5-live-dual-command-v1",
+  "scenario": "S1",
+  "instances": [2, 3],
+  "seeds": [1, 2, 3, 4, 5],
+  "batch_size": 12,
+  "command_interval_ms": 500,
+  "faults": [
+    {"id": "NONE", "command_loss_rate": 0.0, "command_latency_ms": 0},
+    {"id": "COMMAND_LOSS_10", "command_loss_rate": 0.10, "command_latency_ms": 0},
+    {"id": "COMMAND_LOSS_20", "command_loss_rate": 0.20, "command_latency_ms": 0},
+    {"id": "COMMAND_LOSS_30", "command_loss_rate": 0.30, "command_latency_ms": 0},
+    {"id": "COMMAND_LATENCY_100MS", "command_loss_rate": 0.0, "command_latency_ms": 100},
+    {"id": "COMMAND_LATENCY_1100MS", "command_loss_rate": 0.0, "command_latency_ms": 1100}
+  ]
+}

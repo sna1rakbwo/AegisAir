@@ -1,0 +1,118 @@
+{
+  "additionalProperties": false,
+  "description": "One UAV state snapshot in the shared FLU world frame.\n\nThis is the canonical shape published on ``swarm/drone/{id}/telemetry`` and\nis aligned with ``px4_adapter/mqtt_codec.encode_safedrones_telemetry``.",
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "drone": {
+      "description": "UAV instance id",
+      "minimum": 0,
+      "title": "Drone",
+      "type": "integer"
+    },
+    "position": {
+      "description": "FLU position [x_forward, y_left, z_up] in meters",
+      "maxItems": 3,
+      "minItems": 3,
+      "prefixItems": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        }
+      ],
+      "title": "Position",
+      "type": "array"
+    },
+    "velocity": {
+      "description": "FLU velocity [vx, vy, vz] in m/s",
+      "maxItems": 3,
+      "minItems": 3,
+      "prefixItems": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        }
+      ],
+      "title": "Velocity",
+      "type": "array"
+    },
+    "yaw_deg": {
+      "default": 0.0,
+      "description": "FLU heading in degrees",
+      "title": "Yaw Deg",
+      "type": "number"
+    },
+    "status": {
+      "enum": [
+        "disarmed",
+        "armed",
+        "failsafe",
+        "gcs_connection_lost"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "armed": {
+      "title": "Armed",
+      "type": "boolean"
+    },
+    "nav_state": {
+      "title": "Nav State",
+      "type": "integer"
+    },
+    "failsafe": {
+      "title": "Failsafe",
+      "type": "boolean"
+    },
+    "connection_lost": {
+      "title": "Connection Lost",
+      "type": "boolean"
+    },
+    "source_frame": {
+      "const": "FLU",
+      "default": "FLU",
+      "title": "Source Frame",
+      "type": "string"
+    },
+    "source_timestamp_us": {
+      "description": "Source PX4 timestamp in microseconds",
+      "minimum": 0,
+      "title": "Source Timestamp Us",
+      "type": "integer"
+    },
+    "timestamp_ms": {
+      "description": "Wall-clock capture time in milliseconds",
+      "minimum": 0,
+      "title": "Timestamp Ms",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "drone",
+    "position",
+    "velocity",
+    "status",
+    "armed",
+    "nav_state",
+    "failsafe",
+    "connection_lost",
+    "source_timestamp_us",
+    "timestamp_ms"
+  ],
+  "title": "Telemetry",
+  "type": "object"
+}

@@ -1,0 +1,56 @@
+{
+  "protocol_id": "aegisair-c2-v4-execution-bridge-v1",
+  "phase": "sealed_paired_execution_bridge",
+  "purpose": "在冻结 v4 控制器下检验 barrier execution tau 与 reserve recovery 的因果作用；不重测旧 C2 supervisor。",
+  "rate_hz": 20.0,
+  "max_steps": 400,
+  "goal_epsilon": 0.5,
+  "execution_tau_s": 0.70,
+  "drone_ids": [2, 3],
+  "base_goals": {"2": [4.0, -0.5, 2.5], "3": [-4.0, 0.5, 2.5]},
+  "reset_starts": {"2": [-4.0, 0.5, 2.5], "3": [4.0, -0.5, 2.5]},
+  "methods": {
+    "AEGIS_HOCBF_V4_BAD_TAU": {
+      "constraint_boundary": "full", "k1": 4.0, "k2": 4.0,
+      "boundary_guard": 1.0, "boundary_buffer_m": 0.30,
+      "barrier_model_tau_s": 0.20, "predictive_recovery": true,
+      "prediction_execution_fraction": 0.0, "prediction_steps": 3,
+      "recovery_reserve_threshold": 1.0,
+      "recovery_alpha": 0.5, "recovery_braking_accel_mps2": 2.0,
+      "recovery_boundary_buffer_m": 0.30, "recovery_clear_steps": 5
+    },
+    "AEGIS_HOCBF_V4_REACTIVE": {
+      "constraint_boundary": "full", "k1": 4.0, "k2": 4.0,
+      "boundary_guard": 1.0, "boundary_buffer_m": 0.30,
+      "barrier_model_tau_s": 0.70, "predictive_recovery": false,
+      "recovery_alpha": 0.5, "recovery_braking_accel_mps2": 2.0,
+      "recovery_boundary_buffer_m": 0.30, "recovery_clear_steps": 5
+    },
+    "AEGIS_HOCBF_V4": {
+      "constraint_boundary": "full", "k1": 4.0, "k2": 4.0,
+      "boundary_guard": 1.0, "boundary_buffer_m": 0.30,
+      "barrier_model_tau_s": 0.70, "predictive_recovery": true,
+      "prediction_execution_fraction": 0.0, "prediction_steps": 3,
+      "recovery_reserve_threshold": 1.0,
+      "recovery_alpha": 0.5, "recovery_braking_accel_mps2": 2.0,
+      "recovery_boundary_buffer_m": 0.30, "recovery_clear_steps": 5
+    }
+  },
+  "trials": [
+    {"trial_id": "c2v4b01", "seed": 9301, "condition_order": ["AEGIS_HOCBF_V4_BAD_TAU", "AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V4"]},
+    {"trial_id": "c2v4b02", "seed": 9302, "condition_order": ["AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_BAD_TAU"]},
+    {"trial_id": "c2v4b03", "seed": 9303, "condition_order": ["AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_BAD_TAU", "AEGIS_HOCBF_V4_REACTIVE"]},
+    {"trial_id": "c2v4b04", "seed": 9304, "condition_order": ["AEGIS_HOCBF_V4_BAD_TAU", "AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V4"]},
+    {"trial_id": "c2v4b05", "seed": 9305, "condition_order": ["AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_BAD_TAU"]},
+    {"trial_id": "c2v4b06", "seed": 9306, "condition_order": ["AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_BAD_TAU", "AEGIS_HOCBF_V4_REACTIVE"]},
+    {"trial_id": "c2v4b07", "seed": 9307, "condition_order": ["AEGIS_HOCBF_V4_BAD_TAU", "AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V4"]},
+    {"trial_id": "c2v4b08", "seed": 9308, "condition_order": ["AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_BAD_TAU"]},
+    {"trial_id": "c2v4b09", "seed": 9309, "condition_order": ["AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_BAD_TAU", "AEGIS_HOCBF_V4_REACTIVE"]},
+    {"trial_id": "c2v4b10", "seed": 9310, "condition_order": ["AEGIS_HOCBF_V4_BAD_TAU", "AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V4"]}
+  ],
+  "go_criteria": {
+    "correct_tau": "完整 v4 与 reactive 均 10/10 完成、collision=0、min_rho>0",
+    "execution_effect": "报告 BAD_TAU 相对完整 v4 的 paired public-rho、feasibility 与任务差异；BAD_TAU 的负结果是因果证据，不触发调参"
+  },
+  "stopping_rule": "任一 condition collision 时停止剩余 physical trial；BAD_TAU 的 min_rho<=0 本身只记录，不调整参数。"
+}

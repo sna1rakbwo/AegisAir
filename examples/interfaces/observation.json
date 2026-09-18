@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "agent_id": 2,
+  "position_flu": [-3.0, -0.4, 1.0],
+  "velocity_flu": [1.0, 0.0, 0.0],
+  "goal_relative": [6.0, 0.8, 0.0],
+  "goal_distance": 6.05,
+  "neighbors": [
+    {
+      "agent_id": 3,
+      "relative_position": [6.0, 0.8, 0.0],
+      "relative_velocity": [-2.0, 0.0, 0.0],
+      "distance": 6.05,
+      "closing_speed": 2.0
+    }
+  ],
+  "role": "left_pass",
+  "perception": {
+    "noise_std_m": 0.1,
+    "staleness_ms": 100
+  },
+  "timestamp_ms": 1786728517875
+}

@@ -1,0 +1,165 @@
+{
+  "$defs": {
+    "RecoveryCommand": {
+      "additionalProperties": false,
+      "description": "One high-level recovery command in the LLM action whitelist.",
+      "properties": {
+        "drone": {
+          "minimum": 0,
+          "title": "Drone",
+          "type": "integer"
+        },
+        "action": {
+          "enum": [
+            "HOLD",
+            "YIELD",
+            "REROUTE",
+            "REASSIGN",
+            "CHANGE_PRIORITY",
+            "ABORT",
+            "RETURN"
+          ],
+          "title": "Action",
+          "type": "string"
+        },
+        "waypoint": {
+          "anyOf": [
+            {
+              "maxItems": 3,
+              "minItems": 3,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Required for REROUTE",
+          "title": "Waypoint"
+        },
+        "priority": {
+          "default": "normal",
+          "enum": [
+            "normal",
+            "safety"
+          ],
+          "title": "Priority",
+          "type": "string"
+        },
+        "ttl_sec": {
+          "exclusiveMinimum": 0.0,
+          "title": "Ttl Sec",
+          "type": "number"
+        },
+        "command_id": {
+          "minLength": 1,
+          "title": "Command Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "drone",
+        "action",
+        "ttl_sec",
+        "command_id"
+      ],
+      "title": "RecoveryCommand",
+      "type": "object"
+    },
+    "RecoveryConstraints": {
+      "additionalProperties": false,
+      "description": "Task-level constraints the LLM may express but never bypass hard safety.",
+      "properties": {
+        "keep_min_distance_m": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Keep Min Distance M"
+        },
+        "avoid_center_zone": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Avoid Center Zone"
+        }
+      },
+      "title": "RecoveryConstraints",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Structured semantic-recovery plan returned by the local LLM.",
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "intent_text": {
+      "minLength": 1,
+      "title": "Intent Text",
+      "type": "string"
+    },
+    "commands": {
+      "items": {
+        "$ref": "#/$defs/RecoveryCommand"
+      },
+      "minItems": 1,
+      "title": "Commands",
+      "type": "array"
+    },
+    "constraints": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RecoveryConstraints"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "rationale": {
+      "default": "",
+      "title": "Rationale",
+      "type": "string"
+    },
+    "timestamp_ms": {
+      "minimum": 0,
+      "title": "Timestamp Ms",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "intent_text",
+    "commands",
+    "timestamp_ms"
+  ],
+  "title": "RecoveryPlan",
+  "type": "object"
+}

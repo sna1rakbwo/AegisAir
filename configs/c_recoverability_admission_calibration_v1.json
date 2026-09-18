@@ -1,0 +1,91 @@
+{
+  "protocol_id": "aegisair-c-recoverability-admission-calibration-v1",
+  "phase": "development_calibration_not_qualification_or_sealed_evidence",
+  "rate_hz": 20.0,
+  "max_steps": 800,
+  "goal_epsilon": 0.55,
+  "drone_ids": [2, 3],
+  "failed_drone": 2,
+  "mission_change": {"kind": "fail_drone", "drone": 2},
+  "change_step": 30,
+  "velocity_command_mode": "feedforward_tau",
+  "tau_command_s": 0.7,
+  "conditions": [
+    "IMMEDIATE_COMMIT_RA",
+    "RECOVERABILITY_ADMISSION_RA",
+    "RA_ONLY_HOLD"
+  ],
+  "recoverability_admission": {
+    "clearance_m": 2.4,
+    "braking_accel_mps2": 2.0,
+    "ring_extra_m": [0.4, 0.8, 1.2],
+    "ring_samples": 32,
+    "obstacle_samples": 9,
+    "arena": [-6.0, 6.0, -6.0, 6.0],
+    "waypoint_epsilon_m": 0.55,
+    "max_route_length_m": 18.0
+  },
+  "ra_config": {
+    "tau_ctrl_s": 0.2,
+    "execution_tau_s": 0.7,
+    "k1": 4.0,
+    "k2": 4.0,
+    "boundary_guard": 1.0,
+    "boundary_buffer_m": 0.3,
+    "prediction_execution_fraction": 0.0,
+    "prediction_steps": 3,
+    "recovery_reserve_threshold": 1.0,
+    "recovery_alpha": 0.5,
+    "recovery_braking_accel_mps2": 2.0,
+    "recovery_boundary_buffer_m": 0.3,
+    "recovery_clear_steps": 5
+  },
+  "geometries": {
+    "on_path_failure": {
+      "description": "旧 No-Go 开发几何：失效机位于健康机直达 orphan goal 的路径附近。",
+      "world": "S1",
+      "reset_starts": {"2": [-1.5, 0.0, 2.5], "3": [-4.0, 0.0, 2.5]},
+      "base_goals": {"2": [4.0, 0.0, 2.5], "3": [4.0, -2.0, 2.5]},
+      "critical_goal": [4.0, 0.0],
+      "expected_admission": "admit"
+    },
+    "lateral_failure": {
+      "description": "旧 No-Go 开发几何：失效机与健康机当前航线具有横向偏置。",
+      "world": "S1",
+      "reset_starts": {"2": [-1.5, 2.0, 2.5], "3": [-4.0, -2.0, 2.5]},
+      "base_goals": {"2": [4.0, 2.0, 2.5], "3": [4.0, -2.0, 2.5]},
+      "critical_goal": [4.0, 2.0],
+      "expected_admission": "admit"
+    },
+    "bottleneck_merge_failure": {
+      "description": "旧 No-Go 开发几何：近邻航线向同一汇入区收敛。",
+      "world": "S1",
+      "reset_starts": {"2": [-1.5, 0.0, 2.5], "3": [-4.0, -1.2, 2.5]},
+      "base_goals": {"2": [4.0, 0.0, 2.5], "3": [4.0, -1.2, 2.5]},
+      "critical_goal": [4.0, 0.0],
+      "expected_admission": "admit"
+    },
+    "occupied_orphan_goal": {
+      "description": "开发拒绝几何：失效机静止占据 orphan goal，任何完成该目标的候选均违反准入间距。",
+      "world": "S1",
+      "reset_starts": {"2": [2.0, 0.0, 2.5], "3": [-4.0, -2.0, 2.5]},
+      "base_goals": {"2": [2.0, 0.0, 2.5], "3": [4.0, -2.0, 2.5]},
+      "critical_goal": [2.0, 0.0],
+      "expected_admission": "reject"
+    }
+  },
+  "trials": [
+    {"trial_id": "radm_onpath_dev", "geometry_id": "on_path_failure", "seed": 13001, "condition_order": ["IMMEDIATE_COMMIT_RA", "RECOVERABILITY_ADMISSION_RA", "RA_ONLY_HOLD"]},
+    {"trial_id": "radm_lateral_dev", "geometry_id": "lateral_failure", "seed": 13002, "condition_order": ["RECOVERABILITY_ADMISSION_RA", "RA_ONLY_HOLD", "IMMEDIATE_COMMIT_RA"]},
+    {"trial_id": "radm_bottleneck_dev", "geometry_id": "bottleneck_merge_failure", "seed": 13003, "condition_order": ["RA_ONLY_HOLD", "IMMEDIATE_COMMIT_RA", "RECOVERABILITY_ADMISSION_RA"]},
+    {"trial_id": "radm_reject_dev", "geometry_id": "occupied_orphan_goal", "seed": 13004, "condition_order": ["IMMEDIATE_COMMIT_RA", "RA_ONLY_HOLD", "RECOVERABILITY_ADMISSION_RA"]}
+  ],
+  "calibration_go_criteria": {
+    "admitted": "所有 expected_admission=admit 的 admission 条件必须 admission_count=1、unsafe_commit_count=0、覆盖 critical goal、collision=0、min_rho>0、selected-QP infeasible=0、RA bypass=0、P99<50 ms。",
+    "rejected": "所有 expected_admission=reject 的 admission 条件必须 rejection_count=1、plans_committed=0、不覆盖 critical goal、保持冻结 hold，并通过相同安全/权限/实时性门。",
+    "anti_vacuity": "calibration 同时至少出现一个安全 admission 和一个正确 rejection。",
+    "comparators": "Immediate commit + RA 与 RA-only hold 原样报告；它们是诊断比较，不用于放宽 admission 条件的安全门。"
+  },
+  "stopping_rule": "admission 条件出现 unsafe commit、错误准入/拒绝、任务闭环失败、min_rho<=0、selected-QP infeasible、RA bypass 或 deadline failure 即 calibration No-Go；不得修改本 manifest 后用相同版本重跑。基础设施无效启动可在同一 seed/manifest 下隔离重启。",
+  "claim_boundary": "本文件仅为使用旧暴露几何的 development/calibration。通过后仍必须使用全新几何/seed 进行 qualification，再另立 sealed；不得回写旧 deterministic recovery No-Go。"
+}
