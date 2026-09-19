@@ -14,13 +14,14 @@ from swarm.ra.sota_cbf import (
 class ProjectionQpTest(unittest.TestCase):
     def test_joint_box_and_oblique_constraint_returns_nearest_point(self):
         nominal = np.array([1.0, -1.0])
-        projected, feasible, _ = _solve_projection_qp(
+        projected, feasible, iterations = _solve_projection_qp(
             x_nom=nominal,
             halfspaces=[(np.array([1.0, 2.0]), 2.5)],
             a_max=1.0,
             max_iters=3000,
         )
         self.assertTrue(feasible)
+        self.assertLess(iterations, 100)
         np.testing.assert_allclose(projected, [1.0, 0.75], atol=1e-7)
         np.testing.assert_array_equal(nominal, [1.0, -1.0])
 
@@ -181,7 +182,7 @@ class SotaCbfTest(unittest.TestCase):
         # This safe initial state gives [0.5, 1, -0.5, -1] @ A >= 1.
         direction = np.array([1.0, 2.0]) / np.sqrt(5.0)
         distance = 0.8 + 2.0 * np.sqrt(5.0) + 1.25 - 2.0
-        safe, feasible, _ = solve_prediction_based_cbf_qp(
+        safe, feasible, iterations = solve_prediction_based_cbf_qp(
             a_nom={2: np.array([2.0, -1.0]), 3: np.array([-2.0, 1.0])},
             positions={2: distance * direction, 3: np.zeros(2)},
             velocities={2: np.array([-0.5, -1.0]), 3: np.array([0.5, 1.0])},
@@ -192,12 +193,13 @@ class SotaCbfTest(unittest.TestCase):
             infeasible_fallback="max_brake",
         )
         self.assertTrue(feasible)
+        self.assertLess(iterations, 100)
         np.testing.assert_allclose(safe[2], [2.0, -0.5], atol=1e-7)
         np.testing.assert_allclose(safe[3], [-2.0, 0.5], atol=1e-7)
 
     def test_pb_cbf_respects_revoked_agent_fixed_input(self):
         zero = np.zeros(2)
-        safe, feasible, _ = solve_prediction_based_cbf_qp(
+        safe, feasible, iterations = solve_prediction_based_cbf_qp(
             a_nom={2: zero, 3: zero},
             positions={2: zero, 3: np.array([1.2, 0.0])},
             velocities={2: np.array([1.0, 0.0]), 3: zero},
@@ -208,6 +210,7 @@ class SotaCbfTest(unittest.TestCase):
             fixed_accelerations={3: zero},
         )
         self.assertTrue(feasible)
+        self.assertLess(iterations, 100)
         np.testing.assert_allclose(safe[2], [-1.85, 0.0], atol=1e-7)
         np.testing.assert_array_equal(safe[3], zero)
         slack = -0.5 * (safe[2][0] - safe[3][0]) - 0.925

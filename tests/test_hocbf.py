@@ -89,7 +89,7 @@ class HocbfQpTest(unittest.TestCase):
 
     def test_qp_uses_only_remaining_authority_for_revoked_agent(self) -> None:
         fixed = np.zeros(2)
-        a_safe, feasible, _ = solve_acceleration_qp(
+        a_safe, feasible, iterations = solve_acceleration_qp(
             a_nom={0: np.zeros(2), 1: fixed},
             positions={0: np.array([0.0, 0.0]), 1: np.array([1.2, 0.0])},
             velocities={0: np.array([1.0, 0.0]), 1: np.zeros(2)},
@@ -100,6 +100,7 @@ class HocbfQpTest(unittest.TestCase):
             fixed_accelerations={1: fixed},
         )
         self.assertTrue(feasible)
+        self.assertLess(iterations, 100)
         np.testing.assert_allclose(a_safe[0], [-1.0 / 12.0, 0.0], atol=1e-7)
         np.testing.assert_array_equal(a_safe[1], fixed)
 

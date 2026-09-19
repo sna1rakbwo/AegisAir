@@ -11,27 +11,11 @@ from __future__ import annotations
 
 import numpy as np
 
-
-def _project_box(
-    x: np.ndarray,
-    a_max: float,
-    *,
-    fixed_mask: np.ndarray | None = None,
-    fixed_values: np.ndarray | None = None,
-) -> np.ndarray:
-    projected = np.clip(x, -a_max, a_max)
-    if fixed_mask is not None:
-        projected[fixed_mask] = fixed_values[fixed_mask]
-    return projected
-
-
-def _project_halfspace(x: np.ndarray, c: np.ndarray, b: float) -> np.ndarray:
-    residual = b - float(np.dot(c, x))
-    if residual > 1e-9:
-        norm_sq = float(np.dot(c, c))
-        if norm_sq > 1e-12:
-            return x + residual * c / norm_sq
-    return x
+from swarm.ra.projection import (
+    project_box as _project_box,
+    project_box_and_single_halfspace as _project_box_and_single_halfspace,
+    project_halfspace as _project_halfspace,
+)
 
 
 def _solve_projection_qp(
@@ -51,6 +35,16 @@ def _solve_projection_qp(
         raise ValueError("fixed coordinate arrays must match x_nom")
     x_nom = x_nom.copy()
     x_nom[fixed_mask] = fixed_values[fixed_mask]
+    if len(halfspaces) == 1:
+        c, b = halfspaces[0]
+        return _project_box_and_single_halfspace(
+            x_nom=x_nom,
+            c=c,
+            b=b,
+            a_max=a_max,
+            fixed_mask=fixed_mask,
+            fixed_values=fixed_values,
+        )
     corrections = [np.zeros_like(x_nom) for _ in range(len(halfspaces) + 1)]
     x = x_nom.copy()
     used = 0

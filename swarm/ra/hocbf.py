@@ -22,6 +22,12 @@ from __future__ import annotations
 
 import numpy as np
 
+from swarm.ra.projection import (
+    project_box as _project_box,
+    project_box_and_single_halfspace,
+    project_halfspace as _project_halfspace,
+)
+
 
 def _pair_constraint(
     *,
@@ -101,28 +107,6 @@ def minimum_hocbf_constraint_slack(
         )
         slacks.append(float(np.dot(c, packed) - b))
     return min(slacks, default=float("inf"))
-
-
-def _project_box(
-    x: np.ndarray,
-    a_max: float,
-    *,
-    fixed_mask: np.ndarray | None = None,
-    fixed_values: np.ndarray | None = None,
-) -> np.ndarray:
-    projected = np.clip(x, -a_max, a_max)
-    if fixed_mask is not None:
-        projected[fixed_mask] = fixed_values[fixed_mask]
-    return projected
-
-
-def _project_halfspace(x: np.ndarray, c: np.ndarray, b: float) -> np.ndarray:
-    residual = b - float(np.dot(c, x))
-    if residual > 1e-9:
-        norm_sq = float(np.dot(c, c))
-        if norm_sq > 1e-12:
-            x = x + (residual / norm_sq) * c
-    return x
 
 
 def _fixed_coordinates(
@@ -224,6 +208,29 @@ def solve_acceleration_qp(
             k2=k2,
         )
         halfspaces.append((c, b))
+
+    if len(halfspaces) == 1:
+        x0, feasible, iterations = project_box_and_single_halfspace(
+            x_nom=x,
+            c=halfspaces[0][0],
+            b=halfspaces[0][1],
+            a_max=a_max,
+            fixed_mask=fixed_mask,
+            fixed_values=fixed_values,
+        )
+        return (
+            _fallback_accelerations(
+                x=x0,
+                feasible=feasible,
+                drone_ids=drone_ids,
+                velocities=velocities,
+                a_max=a_max,
+                infeasible_fallback=infeasible_fallback,
+                fixed_accelerations=fixed,
+            ),
+            feasible,
+            iterations,
+        )
 
     # Dykstra's alternating projection onto the intersection of the box and
     # every pairwise half-space converges to the closest point to a_nom.
