@@ -26,10 +26,10 @@ from swarm.recovery import (
 
 
 PROTOCOL_IDS = {
-    "aegisair-c-recoverability-admission-calibration-v2",
-    "aegisair-c-recoverability-admission-qualification-v2",
+    "aegisair-c-recoverability-admission-calibration-v3",
+    "aegisair-c-recoverability-admission-qualification-v3",
 }
-IMPLEMENTATION_VERSION = "dynamic_admission_v2"
+IMPLEMENTATION_VERSION = "dynamic_admission_v3"
 CONDITIONS = {
     "IMMEDIATE_COMMIT_RA",
     "RECOVERABILITY_ADMISSION_RA",
@@ -210,7 +210,7 @@ def main() -> int:
     if manifest.get("implementation_version") != IMPLEMENTATION_VERSION:
         parser.error(
             "implementation_version 必须为 "
-            f"{IMPLEMENTATION_VERSION!r}，v1 manifest 仅保留为历史记录"
+            f"{IMPLEMENTATION_VERSION!r}，旧 manifest 仅保留为历史记录"
         )
     if args.out_dir.exists():
         parser.error(f"拒绝覆盖输出目录：{args.out_dir}")

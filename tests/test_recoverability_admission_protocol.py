@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class RecoverabilityAdmissionProtocolTest(unittest.TestCase):
     def setUp(self) -> None:
         self.manifest = json.loads(
-            (ROOT / "configs/c_recoverability_admission_calibration_v2.json").read_text(
+            (ROOT / "configs/c_recoverability_admission_calibration_v3.json").read_text(
                 encoding="utf-8"
             )
         )
@@ -215,12 +215,10 @@ class RecoverabilityAdmissionProtocolTest(unittest.TestCase):
         )
 
     def test_qualification_references_exact_calibration_manifest(self) -> None:
-        calibration_path = (
-            ROOT / "configs/c_recoverability_admission_calibration_v2.json"
-        )
+        calibration_path = ROOT / "configs/c_recoverability_admission_calibration_v3.json"
         qualification = json.loads(
             (
-                ROOT / "configs/c_recoverability_admission_qualification_v2.json"
+                ROOT / "configs/c_recoverability_admission_qualification_v3.json"
             ).read_text(encoding="utf-8")
         )
         self.assertEqual(

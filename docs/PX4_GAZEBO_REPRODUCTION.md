@@ -36,17 +36,17 @@ bash scripts/run_c1_paper_trial.sh \
 
 该脚本启动两机 S1 世界、发送 GCS heartbeat、等待 MQTT 遥测，再运行对应 runner；结束时只停止它启动的 PID。完整试验需要对冻结 manifest 内每个 `trial_id` 与 `condition_order` 重复调用，并保留每次输出。
 
-修复后的任务接纳 calibration-v2 使用独立入口：
+修复后的任务接纳 calibration-v3 使用独立入口：
 
 ```bash
 export PX4_DIR=/absolute/path/to/PX4-Autopilot
 bash scripts/run_recoverability_admission_trial.sh \
-  configs/c_recoverability_admission_calibration_v2.json \
-  radm2_lateral_dev RECOVERABILITY_ADMISSION_RA \
+  configs/c_recoverability_admission_calibration_v3.json \
+  radm3_lateral_dev RECOVERABILITY_ADMISSION_RA \
   /absolute/path/to/new-output
 ```
 
-先完成 calibration-v2 的所有冻结条件并运行分析器；只有结果为 `GO` 才能启动 qualification-v2。v1 manifest 只保留为历史记录，当前任务接纳 runner 不接受 v1 协议标识。
+先完成 calibration-v3 的所有冻结条件并运行分析器；只有结果为 `GO` 才能启动 qualification-v3。旧 manifest 只保留为历史记录，当前任务接纳 runner 不接受旧协议标识。
 
 ## 边界
 

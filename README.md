@@ -53,7 +53,7 @@ python marllib/run_c1_sota_cbf_gazebo.py \
 
 其他正式实验使用 `configs/` 内对应的 sealed manifest 和同目录的 runner。运行器会拒绝覆盖已有输出目录。冻结 manifest 记录实验设置，但不包含历史轨迹、日志或训练后的模型 checkpoint。
 
-任务接纳的 v1 manifest 只保留为历史协议记录；修复后的 runner 仅接受 `dynamic_admission_v2` calibration/qualification manifest，避免用新实现生成带旧协议标识的结果。新的 sealed-v2 manifest 只能在 v2 calibration 和 qualification 通过后生成。
+任务接纳的 v1/v2 manifest 只保留为历史协议记录；当前 runner 仅接受 `dynamic_admission_v3` calibration/qualification manifest，避免用新实现生成带旧协议标识的结果。新的 sealed-v3 manifest 只能在 v3 calibration 和 qualification 通过后生成。
 
 完整 PX4/Gazebo 环境与单个冻结条件的启动方式见 [docs/PX4_GAZEBO_REPRODUCTION.md](docs/PX4_GAZEBO_REPRODUCTION.md)。
 
