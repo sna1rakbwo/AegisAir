@@ -13,9 +13,10 @@ conda env create -f environment.yml
 conda activate eai-swarm
 pip install -r requirements.txt
 python -m unittest discover -s tests
+python scripts/validate_pcbf_baseline.py
 ```
 
-该检查不需要 GPU、PX4、Gazebo 或原始数据。测试覆盖加速度约束的 HOCBF/QP、不可行时制动回退、确定性任务恢复、消息 schema 以及关键 manifest 的结构。
+该检查不需要 GPU、PX4、Gazebo 或原始数据。测试覆盖加速度约束的 HOCBF/QP、不可行时制动回退、确定性任务恢复、消息 schema 以及关键 manifest 的结构。PCBF 验证使用 CasADi/IPOPT 运行确定性的两阶段非线性规划检查。
 
 ## 闭环仿真复现
 

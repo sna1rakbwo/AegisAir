@@ -104,14 +104,13 @@ def _method_kwargs(method: str, config: dict, tau_command: float) -> dict:
             "pcbf_horizon": int(config["horizon"]),
             "pcbf_terminal_buffer_m": float(config["terminal_buffer_m"]),
             "pcbf_terminal_velocity_tolerance_mps": float(config.get("terminal_velocity_tolerance_mps", 0.0)),
-            "pcbf_slack_weight": float(config["slack_weight"]),
-            "pcbf_tracking_weight": float(config["tracking_weight"]),
-            "pcbf_lateral_candidates": tuple(
-                float(value)
-                for value in config.get(
-                    "lateral_candidates_mps2", [0.0, 0.5, 1.0, 1.5, 2.0]
-                )
-            ),
+            "pcbf_position_bound_m": float(config.get("position_bound_m", 20.0)),
+            "pcbf_velocity_bound_mps": float(config.get("velocity_bound_mps", 5.0)),
+            "pcbf_max_iterations": int(config.get("max_iterations", 300)),
+            "pcbf_multistart_count": int(config.get("multistart_count", 3)),
+            "pcbf_tolerance": float(config.get("tolerance", 1e-7)),
+            "pcbf_acceptable_tolerance": float(config.get("acceptable_tolerance", 1e-5)),
+            "pcbf_lexicographic_tolerance": float(config.get("lexicographic_tolerance", 1e-7)),
         }
     if method == "AEGIS_HOCBF_V2":
         return {

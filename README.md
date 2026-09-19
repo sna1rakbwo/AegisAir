@@ -11,9 +11,10 @@ conda env create -f environment.yml
 conda activate eai-swarm
 pip install -r requirements.txt
 python -m unittest discover -s tests
+python scripts/validate_pcbf_baseline.py
 ```
 
-测试套件是不依赖硬件的最小复现入口，可检验 barrier/QP 安全层、fail-closed 任务恢复、接口校验和冻结 manifest 一致性，无需原始实验数据。
+测试套件是不依赖硬件的最小复现入口，可检验 barrier/QP 安全层、fail-closed 任务恢复、接口校验和冻结 manifest 一致性，无需原始实验数据。PCBF 验证脚本另外检查安全状态的零值、闭环恢复时的值函数下降、随机状态约束残差与求解时延。
 
 ## 目录说明
 

@@ -59,8 +59,14 @@ class FilterResult:
     recovery_reason: str | None = None
     feasibility_reserve: float | None = None
     pcbf_status: str | None = None
+    pcbf_stage1_status: str | None = None
+    pcbf_stage2_status: str | None = None
     pcbf_terminal_feasible: bool | None = None
+    pcbf_value: float | None = None
     pcbf_slack_sum: float | None = None
+    pcbf_tracking_cost: float | None = None
+    pcbf_max_constraint_violation: float | None = None
+    pcbf_tie_break_applied: bool | None = None
     pcbf_fail_closed_reason: str | None = None
     control_authority: bool = True
     fixed_action: tuple[float, float] | None = None
@@ -90,9 +96,13 @@ class RuntimeAssurance:
         pcbf_horizon: int = 20,
         pcbf_terminal_buffer_m: float = 0.10,
         pcbf_terminal_velocity_tolerance_mps: float = 0.0,
-        pcbf_slack_weight: float = 20.0,
-        pcbf_tracking_weight: float = 0.05,
-        pcbf_lateral_candidates: tuple[float, ...] = (0.0, 0.5, 1.0, 1.5, 2.0),
+        pcbf_position_bound_m: float = 20.0,
+        pcbf_velocity_bound_mps: float = 5.0,
+        pcbf_max_iterations: int = 300,
+        pcbf_multistart_count: int = 3,
+        pcbf_tolerance: float = 1e-7,
+        pcbf_acceptable_tolerance: float = 1e-5,
+        pcbf_lexicographic_tolerance: float = 1e-7,
         zocbf_delta: float = 0.0,
         pb_alpha: float = 2.0,
         pb_braking_accel: float | None = None,
@@ -144,9 +154,13 @@ class RuntimeAssurance:
             a_max=a_max,
             terminal_buffer_m=pcbf_terminal_buffer_m,
             terminal_velocity_tolerance_mps=pcbf_terminal_velocity_tolerance_mps,
-            slack_weight=pcbf_slack_weight,
-            tracking_weight=pcbf_tracking_weight,
-            lateral_candidates=pcbf_lateral_candidates,
+            position_bound_m=pcbf_position_bound_m,
+            velocity_bound_mps=pcbf_velocity_bound_mps,
+            max_iterations=pcbf_max_iterations,
+            multistart_count=pcbf_multistart_count,
+            tolerance=pcbf_tolerance,
+            acceptable_tolerance=pcbf_acceptable_tolerance,
+            lexicographic_tolerance=pcbf_lexicographic_tolerance,
         )
         self.zocbf_delta = zocbf_delta
         self.pb_alpha = pb_alpha
@@ -564,30 +578,30 @@ class RuntimeAssurance:
                     ).items()
                 },
                 config=PCBFConfig(
-                horizon=self.pcbf_config.horizon,
-                dt=dt,
-                # The command interface publishes ``v + command_scale*a``,
-                # but PX4 only realizes an alpha fraction during this 20 Hz
-                # sample under its first-order velocity tracking dynamics.
-                # PCBF must predict the realized state increment, not the
-                # larger setpoint jump.
-                control_scale_s=(
-                    (
-                        1.0 - float(np.exp(-dt / self.tau_px4))
-                        if self.tau_px4 > 0.0
-                        else 1.0
-                    ) * command_scale
-                ),
-                a_max=self.a_max,
+                    horizon=self.pcbf_config.horizon,
+                    dt=dt,
+                    # The command interface publishes ``v + command_scale*a``,
+                    # but PX4 only realizes an alpha fraction during this 20 Hz
+                    # sample under its first-order velocity tracking dynamics.
+                    # PCBF must predict the realized state increment, not the
+                    # larger setpoint jump.
+                    control_scale_s=(
+                        (
+                            1.0 - float(np.exp(-dt / self.tau_px4))
+                            if self.tau_px4 > 0.0
+                            else 1.0
+                        ) * command_scale
+                    ),
+                    a_max=self.a_max,
                     terminal_buffer_m=self.pcbf_config.terminal_buffer_m,
                     terminal_velocity_tolerance_mps=self.pcbf_config.terminal_velocity_tolerance_mps,
-                    slack_weight=self.pcbf_config.slack_weight,
-                    tracking_weight=self.pcbf_config.tracking_weight,
-                    lateral_candidates=self.pcbf_config.lateral_candidates,
-                    iterations=self.pcbf_config.iterations,
-                    step_size=self.pcbf_config.step_size,
-                    projection_iterations=self.pcbf_config.projection_iterations,
+                    position_bound_m=self.pcbf_config.position_bound_m,
+                    velocity_bound_mps=self.pcbf_config.velocity_bound_mps,
+                    max_iterations=self.pcbf_config.max_iterations,
+                    multistart_count=self.pcbf_config.multistart_count,
                     tolerance=self.pcbf_config.tolerance,
+                    acceptable_tolerance=self.pcbf_config.acceptable_tolerance,
+                    lexicographic_tolerance=self.pcbf_config.lexicographic_tolerance,
                 ),
                 fixed_accelerations=fixed_accelerations,
             )
@@ -742,8 +756,22 @@ class RuntimeAssurance:
                 feasible=bool(feasible),
                 selected_filter=("pcbf" if self.sampled_data_method == "pcbf" else None),
                 pcbf_status=(pcbf_result.status if pcbf_result is not None else None),
+                pcbf_stage1_status=(pcbf_result.stage1_status if pcbf_result is not None else None),
+                pcbf_stage2_status=(pcbf_result.stage2_status if pcbf_result is not None else None),
                 pcbf_terminal_feasible=(pcbf_result.terminal_feasible if pcbf_result is not None else None),
+                pcbf_value=(pcbf_result.value if pcbf_result is not None else None),
                 pcbf_slack_sum=(pcbf_result.slack_sum if pcbf_result is not None else None),
+                pcbf_tracking_cost=(pcbf_result.tracking_cost if pcbf_result is not None else None),
+                pcbf_max_constraint_violation=(
+                    pcbf_result.max_constraint_violation
+                    if pcbf_result is not None
+                    else None
+                ),
+                pcbf_tie_break_applied=(
+                    pcbf_result.tie_break_applied
+                    if pcbf_result is not None
+                    else None
+                ),
                 pcbf_fail_closed_reason=(pcbf_result.fail_closed_reason if pcbf_result is not None else None),
                 control_authority=i not in fixed_actions,
                 fixed_action=(

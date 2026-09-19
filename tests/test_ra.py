@@ -158,9 +158,15 @@ class RuntimeAssuranceHocbfTest(unittest.TestCase):
         results = ra.filter(snapshots, nominal, t=0.0)
         for result in results.values():
             self.assertEqual(result.selected_filter, "pcbf")
-            self.assertEqual(result.pcbf_status, "optimal_approx")
+            self.assertEqual(result.pcbf_status, "solved_local")
+            self.assertEqual(result.pcbf_stage1_status, "Solve_Succeeded")
+            self.assertEqual(result.pcbf_stage2_status, "Solve_Succeeded")
             self.assertTrue(result.pcbf_terminal_feasible)
+            self.assertIsNotNone(result.pcbf_value)
             self.assertIsNotNone(result.pcbf_slack_sum)
+            self.assertIsNotNone(result.pcbf_tracking_cost)
+            self.assertIsNotNone(result.pcbf_max_constraint_violation)
+            self.assertTrue(result.pcbf_tie_break_applied)
             self.assertIsNone(result.pcbf_fail_closed_reason)
             self.assertTrue(result.feasible)
 
