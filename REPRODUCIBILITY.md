@@ -14,9 +14,10 @@ conda activate eai-swarm
 pip install -r requirements.txt
 python -m unittest discover -s tests
 python scripts/validate_pcbf_baseline.py
+python scripts/validate_dynamic_admission.py
 ```
 
-该检查不需要 GPU、PX4、Gazebo 或原始数据。测试覆盖加速度约束的 HOCBF/QP、不可行时制动回退、确定性任务恢复、消息 schema 以及关键 manifest 的结构。PCBF 验证使用 CasADi/IPOPT 运行确定性的两阶段非线性规划检查。
+该检查不需要 GPU、PX4、Gazebo 或原始数据。测试覆盖加速度约束的 HOCBF/QP、不可行时制动回退、确定性任务恢复、消息 schema 以及关键 manifest 的结构。PCBF 验证使用 CasADi/IPOPT 运行确定性的两阶段非线性规划检查；动态接纳验证使用时间对齐 rollout 检查速度相关决策与计算时延。
 
 ## 闭环仿真复现
 
@@ -29,6 +30,8 @@ python marllib/run_c1_sota_cbf_gazebo.py \
 ```
 
 原始实验的 checkpoint、日志和轨迹未公开；运行结果应被视为新的复现实验，不应冒充为历史封存结果。
+
+任务接纳 v1 manifest 与旧 sealed 结果仅作为历史协议保留。当前 runner 要求 `dynamic_admission_v2`，先运行 calibration-v2，再运行 qualification-v2；两者通过前不生成新的 sealed manifest。
 
 ## 结果与失败的记录
 

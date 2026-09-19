@@ -26,10 +26,10 @@ from swarm.recovery import (
 
 
 PROTOCOL_IDS = {
-    "aegisair-c-recoverability-admission-calibration-v1",
-    "aegisair-c-recoverability-admission-qualification-v1",
-    "aegisair-c-recoverability-admission-sealed-v1",
+    "aegisair-c-recoverability-admission-calibration-v2",
+    "aegisair-c-recoverability-admission-qualification-v2",
 }
+IMPLEMENTATION_VERSION = "dynamic_admission_v2"
 CONDITIONS = {
     "IMMEDIATE_COMMIT_RA",
     "RECOVERABILITY_ADMISSION_RA",
@@ -76,16 +76,46 @@ def _ra_kwargs(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _admission_config(config: dict[str, Any]) -> RecoverabilityAdmissionConfig:
+def _admission_config(
+    config: dict[str, Any],
+    *,
+    rate_hz: float,
+    execution_tau_s: float,
+    command_feedforward_tau_s: float,
+) -> RecoverabilityAdmissionConfig:
     return RecoverabilityAdmissionConfig(
         clearance_m=float(config["clearance_m"]),
         braking_accel_mps2=float(config["braking_accel_mps2"]),
+        braking_accel_uncertainty_mps2=float(
+            config.get("braking_accel_uncertainty_mps2", 0.25)
+        ),
         ring_extra_m=tuple(float(value) for value in config["ring_extra_m"]),
         ring_samples=int(config["ring_samples"]),
-        obstacle_samples=int(config["obstacle_samples"]),
         arena=tuple(float(value) for value in config["arena"]),
         waypoint_epsilon_m=float(config["waypoint_epsilon_m"]),
         max_route_length_m=float(config["max_route_length_m"]),
+        dt_s=float(config.get("dt_s", 1.0 / rate_hz)),
+        rollout_horizon_s=float(config.get("rollout_horizon_s", 16.0)),
+        reaction_delay_s=float(config.get("reaction_delay_s", 1.0 / rate_hz)),
+        goal_gain_s_inv=float(config.get("goal_gain_s_inv", 1.5)),
+        velocity_gain_s_inv=float(config.get("velocity_gain_s_inv", 2.0)),
+        healthy_velocity_limit_mps=float(
+            config.get("healthy_velocity_limit_mps", 1.5)
+        ),
+        healthy_acceleration_limit_mps2=float(
+            config.get("healthy_acceleration_limit_mps2", 2.0)
+        ),
+        execution_tau_s=float(config.get("execution_tau_s", execution_tau_s)),
+        command_feedforward_tau_s=float(
+            config.get(
+                "command_feedforward_tau_s",
+                command_feedforward_tau_s,
+            )
+        ),
+        terminal_speed_mps=float(config.get("terminal_speed_mps", 0.15)),
+        tracking_error_buffer_m=float(
+            config.get("tracking_error_buffer_m", 0.20)
+        ),
     )
 
 
@@ -177,6 +207,11 @@ def main() -> int:
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
     if manifest.get("protocol_id") not in PROTOCOL_IDS:
         parser.error(f"protocol_id 必须属于 {sorted(PROTOCOL_IDS)}")
+    if manifest.get("implementation_version") != IMPLEMENTATION_VERSION:
+        parser.error(
+            "implementation_version 必须为 "
+            f"{IMPLEMENTATION_VERSION!r}，v1 manifest 仅保留为历史记录"
+        )
     if args.out_dir.exists():
         parser.error(f"拒绝覆盖输出目录：{args.out_dir}")
     trial = next(
@@ -201,7 +236,12 @@ def main() -> int:
         client = RuleMissionPlanner()
     elif args.condition == "RECOVERABILITY_ADMISSION_RA":
         coordinator = RecoverabilityAdmissionCoordinator(
-            _admission_config(manifest["recoverability_admission"])
+            _admission_config(
+                manifest["recoverability_admission"],
+                rate_hz=float(manifest["rate_hz"]),
+                execution_tau_s=float(manifest["ra_config"]["execution_tau_s"]),
+                command_feedforward_tau_s=float(manifest["tau_command_s"]),
+            )
         )
     else:
         coordinator = RAOnlySafeHoldCoordinator()

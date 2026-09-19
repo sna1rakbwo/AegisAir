@@ -12,9 +12,10 @@ conda activate eai-swarm
 pip install -r requirements.txt
 python -m unittest discover -s tests
 python scripts/validate_pcbf_baseline.py
+python scripts/validate_dynamic_admission.py
 ```
 
-测试套件是不依赖硬件的最小复现入口，可检验 barrier/QP 安全层、fail-closed 任务恢复、接口校验和冻结 manifest 一致性，无需原始实验数据。PCBF 验证脚本另外检查安全状态的零值、闭环恢复时的值函数下降、随机状态约束残差与求解时延。
+测试套件是不依赖硬件的最小复现入口，可检验 barrier/QP 安全层、fail-closed 任务恢复、接口校验和冻结 manifest 一致性，无需原始实验数据。PCBF 验证脚本另外检查安全状态的零值、闭环恢复时的值函数下降、随机状态约束残差与求解时延；动态接纳验证脚本检查连续失效轨迹、速度相关决策和一次性准入时延。
 
 ## 目录说明
 
@@ -51,6 +52,8 @@ python marllib/run_c1_sota_cbf_gazebo.py \
 ```
 
 其他正式实验使用 `configs/` 内对应的 sealed manifest 和同目录的 runner。运行器会拒绝覆盖已有输出目录。冻结 manifest 记录实验设置，但不包含历史轨迹、日志或训练后的模型 checkpoint。
+
+任务接纳的 v1 manifest 只保留为历史协议记录；修复后的 runner 仅接受 `dynamic_admission_v2` calibration/qualification manifest，避免用新实现生成带旧协议标识的结果。新的 sealed-v2 manifest 只能在 v2 calibration 和 qualification 通过后生成。
 
 完整 PX4/Gazebo 环境与单个冻结条件的启动方式见 [docs/PX4_GAZEBO_REPRODUCTION.md](docs/PX4_GAZEBO_REPRODUCTION.md)。
 
