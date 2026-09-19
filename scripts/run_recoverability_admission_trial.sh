@@ -11,8 +11,9 @@ PYTHON="${PYTHON:-python}"
 PX4_DIR="${PX4_DIR:?Set PX4_DIR to a PX4-Autopilot v1.16 checkout}"
 
 [[ ! -e "$OUT_DIR" ]] || { echo "refusing to overwrite $OUT_DIR" >&2; exit 2; }
-seed="$("$PYTHON" - "$MANIFEST" "$TRIAL_ID" "$CONDITION" <<'PY'
+mapfile -t trial_setup < <("$PYTHON" - "$MANIFEST" "$TRIAL_ID" "$CONDITION" <<'PY'
 import json
+import math
 import sys
 
 manifest = json.load(open(sys.argv[1], encoding="utf-8"))
@@ -21,12 +22,25 @@ for trial in manifest["trials"]:
         continue
     if sys.argv[3] not in trial.get("condition_order", []):
         raise SystemExit("condition is not assigned to this trial")
+    geometry = manifest["geometries"][trial["geometry_id"]]
+    starts = geometry["reset_starts"]
+    poses = []
+    for drone in manifest["drone_ids"]:
+        start = starts[str(drone)]
+        if len(start) != 3 or not all(math.isfinite(float(value)) for value in start):
+            raise SystemExit(f"invalid reset start for drone {drone}")
+        poses.append(
+            f"{int(drone)}={float(start[0]):.12g},{float(start[1]):.12g},0.5"
+        )
     print(trial["seed"])
+    print(";".join(poses))
     break
 else:
     raise SystemExit("unknown trial id")
 PY
-)"
+)
+seed="${trial_setup[0]:?missing trial seed}"
+poses="${trial_setup[1]:?missing trial launch poses}"
 
 mkdir -p "$ROOT/.runtime"
 "$PYTHON" "$ROOT/scripts/gcs_heartbeat.py" \
@@ -36,7 +50,7 @@ heartbeat_2=$!
   --port 18573 --duration-s 900 >"$ROOT/.runtime/gcs_3.log" 2>&1 &
 heartbeat_3=$!
 launch_log="$ROOT/.runtime/launch_${TRIAL_ID}_${CONDITION}.log"
-PX4_DIR="$PX4_DIR" GAZEBO_SEED="$seed" \
+PX4_DIR="$PX4_DIR" GAZEBO_SEED="$seed" POSES="$poses" \
   "$ROOT/scripts/start_paper_s1_sitl.sh" >"$launch_log" 2>&1 &
 launcher=$!
 
