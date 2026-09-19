@@ -38,7 +38,8 @@ def _solve_projection_qp(
     used = 0
     for used in range(1, max_iters + 1):
         previous = x.copy()
-        current = x_nom
+        current = x.copy()
+        correction_change = 0.0
         for index in range(len(halfspaces) + 1):
             shifted = current + corrections[index]
             if index == 0:
@@ -46,10 +47,19 @@ def _solve_projection_qp(
             else:
                 c, b = halfspaces[index - 1]
                 projected = _project_halfspace(shifted, c, b)
-            corrections[index] = shifted - projected
+            correction = shifted - projected
+            correction_change = max(
+                correction_change,
+                float(np.linalg.norm(correction - corrections[index])),
+            )
+            corrections[index] = correction
             current = projected
         x = current
-        if float(np.linalg.norm(x - previous)) <= 1e-9:
+        # A stationary iterate can be transient while Dykstra duals change.
+        if (
+            float(np.linalg.norm(x - previous)) <= 1e-9
+            and correction_change <= 1e-9
+        ):
             break
     feasible = bool(np.all(np.abs(x) <= a_max + 1e-6))
     feasible = feasible and all(float(np.dot(c, x)) >= b - 1e-6 for c, b in halfspaces)
