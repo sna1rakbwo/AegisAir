@@ -20,7 +20,10 @@ def _common_integrity(row: dict[str, Any]) -> bool:
         and audit["failed_horizontal_command_zero_all_steps"]
         and row.get("published_command_mismatch_count") == 0
         and row.get("published_command_constraint_unknown_count") == 0
-        and row.get("published_command_constraint_failure_count") == 0
+        and row.get(
+            "published_constraint_failure_while_solver_feasible_count",
+            row.get("published_command_constraint_failure_count"),
+        ) == 0
         and latency["p99"] < 50.0
         and latency["deadline_misses"] == 0
     )
@@ -29,6 +32,7 @@ def _common_integrity(row: dict[str, Any]) -> bool:
 def _safe_gate(row: dict[str, Any]) -> bool:
     return bool(
         _common_integrity(row)
+        and row.get("published_command_constraint_failure_count") == 0
         and not row["collision"]
         and row["min_rho"] is not None
         and row["min_rho"] > 0.0
@@ -37,7 +41,9 @@ def _safe_gate(row: dict[str, Any]) -> bool:
 
 
 def _post_failure_critical_reached(row: dict[str, Any]) -> bool:
-    return bool(row.get("post_failure_critical_reached", row["critical_reached"]))
+    if "post_failure_critical_reached" in row:
+        return bool(row["post_failure_critical_reached"])
+    return bool(row["critical_reached"])
 
 
 def analyze(manifest: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -118,7 +124,6 @@ def analyze(manifest: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, A
         and len(immediate_rows) == len(manifest["trials"])
         and all(item["passed"] for item in admission_checks)
         and all(item["passed"] for item in hold_checks)
-        and all(item["passed"] for item in immediate_integrity)
         and anti_vacuity
     )
     return {

@@ -1989,6 +1989,7 @@ def run_mqtt_loop(
         published_command_mismatch_count = 0
         published_command_constraint_unknown_count = 0
         published_command_constraint_failure_count = 0
+        published_constraint_failure_while_solver_feasible_count = 0
         infrastructure_valid = True
         infrastructure_invalid_reasons: set[str] = set()
         previous_issued_velocity = {
@@ -2713,6 +2714,11 @@ def run_mqtt_loop(
             published_command_constraint_failure_count += (
                 len(drone_ids) if joint_constraint_ok is False else 0
             )
+            published_constraint_failure_while_solver_feasible_count += (
+                len(drone_ids)
+                if joint_constraint_ok is False and solver_feasible
+                else 0
+            )
             for row in step_rows.values():
                 row["all_published_commands_match_selected"] = joint_command_matches
                 row["published_command_constraint_ok"] = joint_constraint_ok
@@ -2833,6 +2839,9 @@ def run_mqtt_loop(
         "published_command_mismatch_count": published_command_mismatch_count,
         "published_command_constraint_unknown_count": published_command_constraint_unknown_count,
         "published_command_constraint_failure_count": published_command_constraint_failure_count,
+        "published_constraint_failure_while_solver_feasible_count": (
+            published_constraint_failure_while_solver_feasible_count
+        ),
         "infrastructure_valid": infrastructure_valid,
         "infrastructure_invalid_reasons": sorted(infrastructure_invalid_reasons),
         "freshness_gate": {

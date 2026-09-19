@@ -139,6 +139,81 @@ class RecoverabilityAdmissionProtocolTest(unittest.TestCase):
         self.assertFalse(result["complete"])
         self.assertFalse(result["anti_vacuity"])
 
+    def test_immediate_comparator_is_reported_without_gating_go(self) -> None:
+        rows = []
+        for trial in self.manifest["trials"]:
+            expected = self.manifest["geometries"][trial["geometry_id"]][
+                "expected_admission"
+            ]
+            common = {
+                "trial_id": trial["trial_id"],
+                "expected_admission": expected,
+                "infrastructure_valid": True,
+                "safety_bypass_count": 0,
+                "published_command_mismatch_count": 0,
+                "published_command_constraint_unknown_count": 0,
+                "published_command_constraint_failure_count": 0,
+                "published_constraint_failure_while_solver_feasible_count": 0,
+                "collision": False,
+                "min_rho": 0.1,
+                "ra_solve_latency_summary_ms": {
+                    "p99": 1.0,
+                    "deadline_misses": 0,
+                },
+                "trajectory_audit": {
+                    "ra_bypass_count": 0,
+                    "failed_authority_revoked_all_steps": True,
+                    "failed_horizontal_command_zero_all_steps": True,
+                    "selected_qp_infeasible_steps": 0,
+                    "hold_goal_frozen": True,
+                },
+            }
+            admitted = expected == "admit"
+            rows.append(
+                {
+                    **common,
+                    "condition": "RECOVERABILITY_ADMISSION_RA",
+                    "post_failure_critical_reached": admitted,
+                    "recoverability_admission": {
+                        "admission_count": int(admitted),
+                        "rejection_count": int(not admitted),
+                        "plans_committed": int(admitted),
+                        "unsafe_commit_count": 0,
+                        "decision_latency_ms": 1.0,
+                        "completed": admitted,
+                    },
+                }
+            )
+            rows.append(
+                {
+                    **common,
+                    "condition": "RA_ONLY_HOLD",
+                    "post_failure_critical_reached": False,
+                    "recoverability_admission": {"plans_committed": 0},
+                }
+            )
+            rows.append(
+                {
+                    **common,
+                    "condition": "IMMEDIATE_COMMIT_RA",
+                    "collision": True,
+                    "min_rho": -0.5,
+                    "published_command_constraint_failure_count": 2,
+                    "trajectory_audit": {
+                        **common["trajectory_audit"],
+                        "selected_qp_infeasible_steps": 1,
+                    },
+                    "post_failure_critical_reached": True,
+                    "recoverability_admission": None,
+                }
+            )
+        result = analyze(self.manifest, rows)
+        self.assertEqual(result["decision"], "GO")
+        self.assertTrue(result["complete"])
+        self.assertTrue(
+            all(item["passed"] for item in result["immediate_integrity_checks"])
+        )
+
     def test_qualification_references_exact_calibration_manifest(self) -> None:
         calibration_path = (
             ROOT / "configs/c_recoverability_admission_calibration_v2.json"
