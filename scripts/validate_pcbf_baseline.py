@@ -50,13 +50,18 @@ def _safe_hover_case(config: PCBFConfig) -> dict:
     }
 
 
-def _closed_loop_recovery(config: PCBFConfig, steps: int) -> dict:
+def _closed_loop_recovery(
+    config: PCBFConfig, steps: int, *, use_warm_start: bool
+) -> dict:
     positions = {0: np.array([-0.8, 0.0]), 1: np.array([0.8, 0.0])}
     velocities = {0: np.array([0.1, 0.0]), 1: np.array([-0.1, 0.0])}
     nominal = {0: np.array([2.0, 0.0]), 1: np.array([-2.0, 0.0])}
     values: list[float] = []
     latencies: list[float] = []
     residuals: list[float] = []
+    warm_latencies: list[float] = []
+    previous_plan: np.ndarray | None = None
+    warm_start_steps = 0
 
     for _ in range(steps):
         result, latency_ms = _solve_timed(
@@ -65,6 +70,7 @@ def _closed_loop_recovery(config: PCBFConfig, steps: int) -> dict:
             velocities=velocities,
             safe_distances={(0, 1): 2.0},
             config=config,
+            warm_start_plan=previous_plan if use_warm_start else None,
         )
         if not result.feasible or result.plan is None:
             raise RuntimeError(
@@ -73,6 +79,10 @@ def _closed_loop_recovery(config: PCBFConfig, steps: int) -> dict:
         values.append(result.value)
         latencies.append(latency_ms)
         residuals.append(result.max_constraint_violation)
+        warm_start_steps += int(result.warm_start_used)
+        if result.warm_start_used:
+            warm_latencies.append(latency_ms)
+        previous_plan = result.plan.copy()
         predicted_p, predicted_v = _predict(
             result.plan,
             positions=positions,
@@ -90,8 +100,10 @@ def _closed_loop_recovery(config: PCBFConfig, steps: int) -> dict:
         raise RuntimeError(f"PCBF value increased by {max_increase}")
     if values[-1] > config.acceptable_tolerance:
         raise RuntimeError("closed-loop recovery did not reach the zero-level set")
-    return {
+    report = {
         "steps": steps,
+        "mode": "warm_start" if use_warm_start else "cold_multistart",
+        "warm_start_steps": warm_start_steps,
         "values": values,
         "nonincreasing_within_tolerance": True,
         "max_value_increase": max_increase,
@@ -100,6 +112,13 @@ def _closed_loop_recovery(config: PCBFConfig, steps: int) -> dict:
         "latency_max_ms": float(np.max(latencies)),
         "max_constraint_violation": float(np.max(residuals)),
     }
+    if warm_latencies:
+        report["warm_only_latency_median_ms"] = float(np.median(warm_latencies))
+        report["warm_only_latency_p95_ms"] = float(
+            np.percentile(warm_latencies, 95)
+        )
+        report["warm_only_latency_max_ms"] = float(np.max(warm_latencies))
+    return report
 
 
 def _random_stress(config: PCBFConfig, samples: int, seed: int) -> dict:
@@ -181,6 +200,22 @@ def main() -> int:
         parser.error("sample and recovery counts must be positive")
 
     config = PCBFConfig(horizon=24, multistart_count=3)
+    cold_recovery = _closed_loop_recovery(
+        config, args.recovery_steps, use_warm_start=False
+    )
+    warm_recovery = _closed_loop_recovery(
+        config, args.recovery_steps, use_warm_start=True
+    )
+    value_delta = np.asarray(warm_recovery["values"]) - np.asarray(
+        cold_recovery["values"]
+    )
+    max_warm_value_increase = float(np.max(value_delta, initial=0.0))
+    if max_warm_value_increase > 20.0 * config.acceptable_tolerance:
+        raise RuntimeError(
+            "warm start degraded the recovery PCBF value by "
+            f"{max_warm_value_increase}"
+        )
+
     report = {
         "solver": "CasADi/IPOPT multistart nonlinear program",
         "config": {
@@ -191,9 +226,12 @@ def main() -> int:
             "multistart_count": config.multistart_count,
         },
         "safe_hover": _safe_hover_case(config),
-        "closed_loop_recovery": _closed_loop_recovery(
-            config, args.recovery_steps
-        ),
+        "closed_loop_recovery_cold": cold_recovery,
+        "closed_loop_recovery_warm": warm_recovery,
+        "warm_start_quality": {
+            "max_warm_minus_cold_value": max_warm_value_increase,
+            "value_guard_passed": True,
+        },
         "random_stress": _random_stress(config, args.samples, args.seed),
     }
     encoded = json.dumps(report, indent=2, sort_keys=True)

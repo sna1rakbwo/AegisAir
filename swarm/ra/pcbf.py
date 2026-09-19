@@ -83,6 +83,7 @@ class PCBFResult:
     max_constraint_violation: float = float("inf")
     tracking_cost: float = float("inf")
     tie_break_applied: bool = False
+    warm_start_used: bool = False
 
 
 @dataclass(frozen=True)
@@ -106,6 +107,8 @@ class _SolveAttempt:
     status: str
     success: bool
     max_violation: float
+    lam_x: np.ndarray | None
+    lam_g: np.ndarray | None
 
 
 _SOLVER_IDS = count()
@@ -330,6 +333,16 @@ def _build_solver_bundle(
 
     value_limit = ca.MX.sym("value_limit")
     stage2_constraints = ca.vertcat(common_constraints, primary_objective - value_limit)
+    stage2_options = {
+        **solver_options,
+        "ipopt": {
+            **solver_options["ipopt"],
+            "warm_start_init_point": "yes",
+            "warm_start_bound_push": 1e-8,
+            "warm_start_mult_bound_push": 1e-8,
+            "mu_init": 1e-6,
+        },
+    }
     stage2 = ca.nlpsol(
         f"pcbf_stage2_{solver_id}",
         "ipopt",
@@ -339,7 +352,7 @@ def _build_solver_bundle(
             "f": tracking_objective,
             "g": stage2_constraints,
         },
-        solver_options,
+        stage2_options,
     )
     return _SolverBundle(
         stage1=stage1,
@@ -462,6 +475,32 @@ def _initial_plans(
     return unique
 
 
+def _shift_warm_start(
+    plan: np.ndarray,
+    *,
+    velocities: dict[int, np.ndarray],
+    drone_ids: list[int],
+    fixed_accelerations: dict[int, np.ndarray],
+    config: PCBFConfig,
+) -> np.ndarray:
+    warm = np.asarray(plan, dtype=np.float64)
+    expected_shape = (config.horizon, len(drone_ids), 2)
+    if warm.shape != expected_shape or not np.all(np.isfinite(warm)):
+        raise ValueError(
+            f"PCBF warm-start plan must be finite with shape {expected_shape}"
+        )
+    shifted = np.empty_like(warm)
+    shifted[:-1] = warm[1:]
+    shifted[-1] = 0.0
+    return _enforce_terminal_stop(
+        shifted,
+        velocities=velocities,
+        drone_ids=drone_ids,
+        fixed_accelerations=fixed_accelerations,
+        config=config,
+    )
+
+
 def _pack_decision(plan: np.ndarray, slacks: np.ndarray) -> np.ndarray:
     controls = np.asarray(plan, dtype=np.float64).reshape(plan.shape[0], -1).T
     return np.concatenate([
@@ -553,15 +592,24 @@ def _run_solver(
     lower_constraints: np.ndarray,
     upper_constraints: np.ndarray,
     acceptable_tolerance: float,
+    initial_lam_x: np.ndarray | None = None,
+    initial_lam_g: np.ndarray | None = None,
 ) -> _SolveAttempt:
     try:
+        arguments: dict[str, Any] = {
+            "x0": initial,
+            "p": parameters,
+            "lbx": lower_variables,
+            "ubx": upper_variables,
+            "lbg": lower_constraints,
+            "ubg": upper_constraints,
+        }
+        if initial_lam_x is not None:
+            arguments["lam_x0"] = initial_lam_x
+        if initial_lam_g is not None:
+            arguments["lam_g0"] = initial_lam_g
         result = solver(
-            x0=initial,
-            p=parameters,
-            lbx=lower_variables,
-            ubx=upper_variables,
-            lbg=lower_constraints,
-            ubg=upper_constraints,
+            **arguments,
         )
         decision = np.asarray(result["x"], dtype=np.float64).reshape(-1)
         constraint_values = np.asarray(result["g"], dtype=np.float64).reshape(-1)
@@ -582,6 +630,8 @@ def _run_solver(
             status=str(stats.get("return_status", "unknown")),
             success=success,
             max_violation=max_violation,
+            lam_x=np.asarray(result["lam_x"], dtype=np.float64).reshape(-1),
+            lam_g=np.asarray(result["lam_g"], dtype=np.float64).reshape(-1),
         )
     except Exception as exc:  # CasADi plugin failures must fail closed.
         return _SolveAttempt(
@@ -591,6 +641,8 @@ def _run_solver(
             status=f"exception:{type(exc).__name__}",
             success=False,
             max_violation=float("inf"),
+            lam_x=None,
+            lam_g=None,
         )
 
 
@@ -638,6 +690,7 @@ def solve_pcbf(
     safe_distances: dict[tuple[int, int], float],
     config: PCBFConfig,
     fixed_accelerations: dict[int, np.ndarray] | None = None,
+    warm_start_plan: np.ndarray | None = None,
 ) -> PCBFResult:
     """Solve Huang's PCBF and then select the closest first nominal input."""
     drone_ids = sorted(positions)
@@ -740,16 +793,7 @@ def solve_pcbf(
         config=config,
     )
 
-    stage1_attempts: list[_SolveAttempt] = []
-    for initial_plan in _initial_plans(
-        nominal=nominal,
-        positions=normalized_positions,
-        velocities=normalized_velocities,
-        drone_ids=drone_ids,
-        pairs=pairs,
-        fixed_accelerations=fixed,
-        config=config,
-    ):
+    def run_stage1(initial_plan: np.ndarray) -> _SolveAttempt:
         initial_slacks = _initial_slacks(
             initial_plan,
             positions=normalized_positions,
@@ -758,7 +802,7 @@ def solve_pcbf(
             drone_ids=drone_ids,
             config=config,
         )
-        attempt = _run_solver(
+        return _run_solver(
             bundle.stage1,
             initial=_pack_decision(initial_plan, initial_slacks),
             parameters=parameter_values,
@@ -768,9 +812,36 @@ def solve_pcbf(
             upper_constraints=bundle.ubg_stage1,
             acceptable_tolerance=config.acceptable_tolerance,
         )
-        stage1_attempts.append(attempt)
-        if attempt.success and attempt.objective <= config.acceptable_tolerance:
-            break
+
+    stage1_attempts: list[_SolveAttempt] = []
+    warm_start_used = False
+    if warm_start_plan is not None:
+        warm_attempt = run_stage1(
+            _shift_warm_start(
+                warm_start_plan,
+                velocities=normalized_velocities,
+                drone_ids=drone_ids,
+                fixed_accelerations=fixed,
+                config=config,
+            )
+        )
+        stage1_attempts.append(warm_attempt)
+        warm_start_used = warm_attempt.success
+
+    if not warm_start_used:
+        for initial_plan in _initial_plans(
+            nominal=nominal,
+            positions=normalized_positions,
+            velocities=normalized_velocities,
+            drone_ids=drone_ids,
+            pairs=pairs,
+            fixed_accelerations=fixed,
+            config=config,
+        ):
+            attempt = run_stage1(initial_plan)
+            stage1_attempts.append(attempt)
+            if attempt.success and attempt.objective <= config.acceptable_tolerance:
+                break
 
     successful_stage1 = [attempt for attempt in stage1_attempts if attempt.success]
     total_iterations = sum(attempt.iterations for attempt in stage1_attempts)
@@ -790,6 +861,7 @@ def solve_pcbf(
                 (attempt.max_violation for attempt in stage1_attempts),
                 default=float("inf"),
             ),
+            warm_start_used=False,
         )
 
     primary = min(
@@ -806,6 +878,12 @@ def solve_pcbf(
         lower_constraints=bundle.lbg_stage2,
         upper_constraints=bundle.ubg_stage2,
         acceptable_tolerance=config.acceptable_tolerance,
+        initial_lam_x=primary.lam_x,
+        initial_lam_g=(
+            np.concatenate([primary.lam_g, [0.0]])
+            if primary.lam_g is not None
+            else None
+        ),
     )
     total_iterations += stage2.iterations
     stage2_slack_sum = float("inf")
@@ -854,6 +932,7 @@ def solve_pcbf(
             stage2_status=stage2.status,
             max_constraint_violation=selected.max_violation,
             tie_break_applied=tie_break_applied,
+            warm_start_used=warm_start_used,
         )
 
     accelerations = {
@@ -875,4 +954,5 @@ def solve_pcbf(
         max_constraint_violation=selected.max_violation,
         tracking_cost=float(np.sum((plan[0] - nominal) ** 2)),
         tie_break_applied=tie_break_applied,
+        warm_start_used=warm_start_used,
     )

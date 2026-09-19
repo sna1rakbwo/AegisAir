@@ -67,6 +67,7 @@ class FilterResult:
     pcbf_tracking_cost: float | None = None
     pcbf_max_constraint_violation: float | None = None
     pcbf_tie_break_applied: bool | None = None
+    pcbf_warm_start_used: bool | None = None
     pcbf_fail_closed_reason: str | None = None
     control_authority: bool = True
     fixed_action: tuple[float, float] | None = None
@@ -242,6 +243,8 @@ class RuntimeAssurance:
         self._hocbf_recovery_active = False
         self._hocbf_recovery_clean_steps = 0
         self._hocbf_recovery_reason: str | None = None
+        self._pcbf_warm_start_plan: np.ndarray | None = None
+        self._pcbf_warm_start_drone_ids: tuple[int, ...] | None = None
 
     def _tracker(self, i: int, j: int) -> PairMarginTracker:
         key = (min(i, j), max(i, j))
@@ -565,6 +568,12 @@ class RuntimeAssurance:
             # solve.  For the full-boundary condition this is the current
             # dynamic boundary; it is deliberately not AegisAir's forecast or
             # reserve monitor, which the external baseline must not access.
+            warm_start_plan = None
+            if (
+                not fixed_accelerations
+                and self._pcbf_warm_start_drone_ids == tuple(drone_ids)
+            ):
+                warm_start_plan = self._pcbf_warm_start_plan
             pcbf_result = solve_pcbf(
                 nominal_accelerations=a_nom,
                 positions=positions,
@@ -604,7 +613,18 @@ class RuntimeAssurance:
                     lexicographic_tolerance=self.pcbf_config.lexicographic_tolerance,
                 ),
                 fixed_accelerations=fixed_accelerations,
+                warm_start_plan=warm_start_plan,
             )
+            if (
+                pcbf_result.feasible
+                and pcbf_result.plan is not None
+                and not fixed_accelerations
+            ):
+                self._pcbf_warm_start_plan = pcbf_result.plan.copy()
+                self._pcbf_warm_start_drone_ids = tuple(drone_ids)
+            else:
+                self._pcbf_warm_start_plan = None
+                self._pcbf_warm_start_drone_ids = None
             a_safe = pcbf_result.accelerations
             feasible = pcbf_result.feasible
         elif self.sampled_data_method == "zocbf":
@@ -769,6 +789,11 @@ class RuntimeAssurance:
                 ),
                 pcbf_tie_break_applied=(
                     pcbf_result.tie_break_applied
+                    if pcbf_result is not None
+                    else None
+                ),
+                pcbf_warm_start_used=(
+                    pcbf_result.warm_start_used
                     if pcbf_result is not None
                     else None
                 ),

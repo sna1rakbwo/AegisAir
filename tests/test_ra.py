@@ -167,8 +167,12 @@ class RuntimeAssuranceHocbfTest(unittest.TestCase):
             self.assertIsNotNone(result.pcbf_tracking_cost)
             self.assertIsNotNone(result.pcbf_max_constraint_violation)
             self.assertTrue(result.pcbf_tie_break_applied)
+            self.assertFalse(result.pcbf_warm_start_used)
             self.assertIsNone(result.pcbf_fail_closed_reason)
             self.assertTrue(result.feasible)
+        results = ra.filter(snapshots, nominal, t=0.05)
+        for result in results.values():
+            self.assertTrue(result.pcbf_warm_start_used)
 
     def test_hocbf_v4_switches_before_predicted_infeasibility(self) -> None:
         ra = RuntimeAssurance(

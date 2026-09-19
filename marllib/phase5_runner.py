@@ -2641,6 +2641,7 @@ def run_mqtt_loop(
                         "pcbf_tracking_cost": results[i].pcbf_tracking_cost,
                         "pcbf_max_constraint_violation": results[i].pcbf_max_constraint_violation,
                         "pcbf_tie_break_applied": results[i].pcbf_tie_break_applied,
+                        "pcbf_warm_start_used": results[i].pcbf_warm_start_used,
                         "pcbf_fail_closed_reason": results[i].pcbf_fail_closed_reason,
                         "control_authority": results[i].control_authority,
                         "fixed_action": (

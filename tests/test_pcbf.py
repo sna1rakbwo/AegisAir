@@ -161,6 +161,65 @@ class PCBFTest(unittest.TestCase):
             0.5,
         )
 
+    def test_shifted_warm_start_preserves_recovery_quality(self) -> None:
+        positions = {0: np.array([-0.8, 0.0]), 1: np.array([0.8, 0.0])}
+        velocities = {0: np.array([0.1, 0.0]), 1: np.array([-0.1, 0.0])}
+        nominal = {0: np.array([2.0, 0.0]), 1: np.array([-2.0, 0.0])}
+        first = solve_pcbf(
+            nominal_accelerations=nominal,
+            positions=positions,
+            velocities=velocities,
+            safe_distances={(0, 1): 2.0},
+            config=self.config,
+        )
+        self.assertTrue(first.feasible)
+        self.assertIsNotNone(first.plan)
+        predicted_p, predicted_v = _predict(
+            first.plan,
+            positions=positions,
+            velocities=velocities,
+            drone_ids=[0, 1],
+            config=self.config,
+        )
+        next_positions = {drone: predicted_p[drone][1] for drone in positions}
+        next_velocities = {drone: predicted_v[drone][1] for drone in velocities}
+        cold = solve_pcbf(
+            nominal_accelerations=nominal,
+            positions=next_positions,
+            velocities=next_velocities,
+            safe_distances={(0, 1): 2.0},
+            config=self.config,
+        )
+        warm = solve_pcbf(
+            nominal_accelerations=nominal,
+            positions=next_positions,
+            velocities=next_velocities,
+            safe_distances={(0, 1): 2.0},
+            config=self.config,
+            warm_start_plan=first.plan,
+        )
+        self.assertTrue(warm.feasible)
+        self.assertTrue(warm.warm_start_used)
+        self.assertLessEqual(
+            warm.value,
+            cold.value + 10.0 * self.config.acceptable_tolerance,
+        )
+        self.assertLessEqual(
+            warm.max_constraint_violation,
+            10.0 * self.config.acceptable_tolerance,
+        )
+
+    def test_rejects_malformed_warm_start(self) -> None:
+        with self.assertRaisesRegex(ValueError, "warm-start plan"):
+            solve_pcbf(
+                nominal_accelerations={0: np.zeros(2), 1: np.zeros(2)},
+                positions={0: np.array([-3.0, 0.0]), 1: np.array([3.0, 0.0])},
+                velocities={0: np.zeros(2), 1: np.zeros(2)},
+                safe_distances={(0, 1): 2.0},
+                config=self.config,
+                warm_start_plan=np.zeros((2, 2, 2)),
+            )
+
     def test_manifest_maps_to_two_stage_nonlinear_pcbf(self) -> None:
         root = Path(__file__).resolve().parents[1]
         manifest = json.loads(
