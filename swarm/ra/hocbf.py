@@ -108,7 +108,10 @@ def solve_acceleration_qp(
     # every pairwise half-space converges to the closest point to a_nom.
     corrections = [np.zeros_like(x) for _ in range(len(halfspaces) + 1)]
     x0 = x.copy()
-    for _ in range(max_iters):
+    iterations = 0
+    for iterations in range(1, max_iters + 1):
+        previous = x0.copy()
+        previous_corrections = [correction.copy() for correction in corrections]
         cur = x0
         for idx in range(len(halfspaces) + 1):
             y = cur + corrections[idx]
@@ -120,6 +123,13 @@ def solve_acceleration_qp(
             corrections[idx] = y - proj
             cur = proj
         x0 = cur
+        primal_change = float(np.linalg.norm(x0 - previous))
+        correction_change = max(
+            float(np.linalg.norm(correction - old))
+            for correction, old in zip(corrections, previous_corrections)
+        )
+        if primal_change <= tol and correction_change <= tol:
+            break
 
     feasible = True
     box_ok = np.all(np.abs(x0) <= a_max + 1e-6)
@@ -140,7 +150,7 @@ def solve_acceleration_qp(
                 -a_max,
                 a_max,
             )
-    return a_safe, feasible, max_iters
+    return a_safe, feasible, iterations
 
 
 def beta_of_tau(dt: float, tau: float) -> float:
