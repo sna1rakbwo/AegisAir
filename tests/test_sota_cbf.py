@@ -170,6 +170,40 @@ class SotaCbfTest(unittest.TestCase):
         np.testing.assert_allclose(safe[2], [2.0, -0.5], atol=1e-7)
         np.testing.assert_allclose(safe[3], [-2.0, 0.5], atol=1e-7)
 
+    def test_pb_cbf_respects_revoked_agent_fixed_input(self):
+        zero = np.zeros(2)
+        safe, feasible, _ = solve_prediction_based_cbf_qp(
+            a_nom={2: zero, 3: zero},
+            positions={2: zero, 3: np.array([1.2, 0.0])},
+            velocities={2: np.array([1.0, 0.0]), 3: zero},
+            static_distance={(2, 3): 0.8},
+            alpha=0.5,
+            braking_accel=2.0,
+            a_max=2.0,
+            fixed_accelerations={3: zero},
+        )
+        self.assertTrue(feasible)
+        np.testing.assert_allclose(safe[2], [-1.85, 0.0], atol=1e-7)
+        np.testing.assert_array_equal(safe[3], zero)
+        slack = -0.5 * (safe[2][0] - safe[3][0]) - 0.925
+        self.assertGreaterEqual(slack, -1e-7)
+
+    def test_infeasible_fallback_does_not_restore_revoked_authority(self):
+        fixed = np.array([3.0, 0.0])
+        safe, feasible, _ = solve_prediction_based_cbf_qp(
+            a_nom={2: np.zeros(2), 3: fixed},
+            positions={2: np.zeros(2), 3: np.array([0.1, 0.0])},
+            velocities={2: np.array([1.0, 0.0]), 3: np.zeros(2)},
+            static_distance={(2, 3): 2.0},
+            alpha=4.0,
+            braking_accel=2.0,
+            a_max=2.0,
+            infeasible_fallback="max_brake",
+            fixed_accelerations={3: fixed},
+        )
+        self.assertFalse(feasible)
+        np.testing.assert_array_equal(safe[3], fixed)
+
     def test_zocbf_beta_matches_exact_px4_position_coefficient(self):
         dt = 0.05
         tau = 0.7

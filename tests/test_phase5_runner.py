@@ -403,6 +403,35 @@ class EstimatorWiringTest(unittest.TestCase):
         )
         self.assertEqual(local["observation_mode"], OBSERVATION_LOCAL_FRESH_SELF)
 
+    def test_failure_is_passed_to_ra_as_a_fixed_action(self) -> None:
+        class RecordingRA(RuntimeAssurance):
+            def __init__(self) -> None:
+                super().__init__(params=RuntimeAssuranceParams(tau_ctrl=0.0))
+                self.fixed_history: list[dict[int, np.ndarray]] = []
+
+            def filter(self, *args, fixed_actions=None, **kwargs):
+                self.fixed_history.append(dict(fixed_actions or {}))
+                return super().filter(
+                    *args, fixed_actions=fixed_actions, **kwargs
+                )
+
+        spec = _scenario("drone_failure")
+        env = MultiUAVEnv(spec["scenario"])
+        ra = RecordingRA()
+        run_sim_episode(
+            spec=spec,
+            env=env,
+            seed=1,
+            ra=ra,
+            mode="CBF_ONLY",
+            llm_client=None,
+            llm_fallback=None,
+            max_steps=16,
+            real_time=False,
+        )
+        self.assertNotIn(0, ra.fixed_history[14])
+        np.testing.assert_array_equal(ra.fixed_history[15][0], np.zeros(2))
+
 
 if __name__ == "__main__":
     unittest.main()

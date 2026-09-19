@@ -12,8 +12,17 @@ from __future__ import annotations
 import numpy as np
 
 
-def _project_box(x: np.ndarray, a_max: float) -> np.ndarray:
-    return np.clip(x, -a_max, a_max)
+def _project_box(
+    x: np.ndarray,
+    a_max: float,
+    *,
+    fixed_mask: np.ndarray | None = None,
+    fixed_values: np.ndarray | None = None,
+) -> np.ndarray:
+    projected = np.clip(x, -a_max, a_max)
+    if fixed_mask is not None:
+        projected[fixed_mask] = fixed_values[fixed_mask]
+    return projected
 
 
 def _project_halfspace(x: np.ndarray, c: np.ndarray, b: float) -> np.ndarray:
@@ -31,8 +40,17 @@ def _solve_projection_qp(
     halfspaces: list[tuple[np.ndarray, float]],
     a_max: float,
     max_iters: int,
+    fixed_mask: np.ndarray | None = None,
+    fixed_values: np.ndarray | None = None,
 ) -> tuple[np.ndarray, bool, int]:
-    """Project onto a box intersected with linear barrier half-spaces."""
+    """Project onto control bounds, fixed inputs, and barrier half-spaces."""
+    if fixed_mask is None:
+        fixed_mask = np.zeros_like(x_nom, dtype=bool)
+        fixed_values = np.zeros_like(x_nom)
+    elif fixed_values is None or fixed_mask.shape != x_nom.shape or fixed_values.shape != x_nom.shape:
+        raise ValueError("fixed coordinate arrays must match x_nom")
+    x_nom = x_nom.copy()
+    x_nom[fixed_mask] = fixed_values[fixed_mask]
     corrections = [np.zeros_like(x_nom) for _ in range(len(halfspaces) + 1)]
     x = x_nom.copy()
     used = 0
@@ -43,7 +61,12 @@ def _solve_projection_qp(
         for index in range(len(halfspaces) + 1):
             shifted = current + corrections[index]
             if index == 0:
-                projected = _project_box(shifted, a_max)
+                projected = _project_box(
+                    shifted,
+                    a_max,
+                    fixed_mask=fixed_mask,
+                    fixed_values=fixed_values,
+                )
             else:
                 c, b = halfspaces[index - 1]
                 projected = _project_halfspace(shifted, c, b)
@@ -61,7 +84,10 @@ def _solve_projection_qp(
             and correction_change <= 1e-9
         ):
             break
-    feasible = bool(np.all(np.abs(x) <= a_max + 1e-6))
+    feasible = bool(np.all(np.abs(x[~fixed_mask]) <= a_max + 1e-6))
+    feasible = feasible and bool(
+        np.allclose(x[fixed_mask], fixed_values[fixed_mask], atol=1e-6, rtol=0.0)
+    )
     feasible = feasible and all(float(np.dot(c, x)) >= b - 1e-6 for c, b in halfspaces)
     return x, feasible, used
 
@@ -72,6 +98,30 @@ def _pack_nominal(
     return np.concatenate([np.asarray(a_nom[drone], dtype=np.float64) for drone in drone_ids])
 
 
+def _fixed_coordinates(
+    *,
+    drone_ids: list[int],
+    fixed_accelerations: dict[int, np.ndarray] | None,
+) -> tuple[np.ndarray, np.ndarray, dict[int, np.ndarray]]:
+    fixed = {
+        drone: np.asarray(value, dtype=np.float64)
+        for drone, value in (fixed_accelerations or {}).items()
+    }
+    unknown = set(fixed) - set(drone_ids)
+    if unknown:
+        raise ValueError(f"fixed acceleration contains unknown drones: {sorted(unknown)}")
+    mask = np.zeros(2 * len(drone_ids), dtype=bool)
+    values = np.zeros(2 * len(drone_ids), dtype=np.float64)
+    for index, drone in enumerate(drone_ids):
+        if drone not in fixed:
+            continue
+        if fixed[drone].shape != (2,) or not np.all(np.isfinite(fixed[drone])):
+            raise ValueError("fixed accelerations must be finite planar vectors")
+        mask[2 * index : 2 * index + 2] = True
+        values[2 * index : 2 * index + 2] = fixed[drone]
+    return mask, values, fixed
+
+
 def _unpack_or_brake(
     *,
     x: np.ndarray,
@@ -80,11 +130,18 @@ def _unpack_or_brake(
     velocities: dict[int, np.ndarray],
     a_max: float,
     infeasible_fallback: str,
+    fixed_accelerations: dict[int, np.ndarray] | None = None,
 ) -> dict[int, np.ndarray]:
     if infeasible_fallback not in {"velocity_cancel", "max_brake"}:
         raise ValueError("unknown SOTA-CBF infeasible fallback")
     output = {}
+    fixed_accelerations = fixed_accelerations or {}
     for index, drone in enumerate(drone_ids):
+        if drone in fixed_accelerations:
+            output[drone] = np.asarray(
+                fixed_accelerations[drone], dtype=np.float64
+            ).copy()
+            continue
         if feasible:
             output[drone] = x[2 * index : 2 * index + 2].copy()
             continue
@@ -112,6 +169,7 @@ def solve_zocbf_qp(
     command_scale: float | None = None,
     max_iters: int = 3000,
     infeasible_fallback: str = "velocity_cancel",
+    fixed_accelerations: dict[int, np.ndarray] | None = None,
 ) -> tuple[dict[int, np.ndarray], bool, int]:
     """集中式 ZOCBF 一步 QP。
 
@@ -129,6 +187,9 @@ def solve_zocbf_qp(
         raise ValueError("command_scale must be positive")
     index = {drone: idx for idx, drone in enumerate(drone_ids)}
     x_nom = _pack_nominal(a_nom, drone_ids)
+    fixed_mask, fixed_values, fixed = _fixed_coordinates(
+        drone_ids=drone_ids, fixed_accelerations=fixed_accelerations
+    )
     halfspaces = []
     for (i, j), distance_now in sorted(s_now.items()):
         r = np.asarray(positions[i]) - np.asarray(positions[j])
@@ -147,7 +208,12 @@ def solve_zocbf_qp(
         )
         halfspaces.append((c, b))
     x, feasible, iterations = _solve_projection_qp(
-        x_nom=x_nom, halfspaces=halfspaces, a_max=a_max, max_iters=max_iters
+        x_nom=x_nom,
+        halfspaces=halfspaces,
+        a_max=a_max,
+        max_iters=max_iters,
+        fixed_mask=fixed_mask,
+        fixed_values=fixed_values,
     )
     return (
         _unpack_or_brake(
@@ -157,6 +223,7 @@ def solve_zocbf_qp(
             velocities=velocities,
             a_max=a_max,
             infeasible_fallback=infeasible_fallback,
+            fixed_accelerations=fixed,
         ),
         feasible,
         iterations,
@@ -174,6 +241,7 @@ def solve_prediction_based_cbf_qp(
     a_max: float,
     max_iters: int = 3000,
     infeasible_fallback: str = "velocity_cancel",
+    fixed_accelerations: dict[int, np.ndarray] | None = None,
 ) -> tuple[dict[int, np.ndarray], bool, int]:
     """有限制动力的径向 PB-CBF QP。
 
@@ -188,6 +256,9 @@ def solve_prediction_based_cbf_qp(
     drone_ids = sorted(positions)
     index = {drone: idx for idx, drone in enumerate(drone_ids)}
     x_nom = _pack_nominal(a_nom, drone_ids)
+    fixed_mask, fixed_values, fixed = _fixed_coordinates(
+        drone_ids=drone_ids, fixed_accelerations=fixed_accelerations
+    )
     halfspaces = []
     for (i, j), safe_distance in sorted(static_distance.items()):
         r = np.asarray(positions[i]) - np.asarray(positions[j])
@@ -215,7 +286,12 @@ def solve_prediction_based_cbf_qp(
             # keep the fail-closed infeasibility explicit.
             halfspaces.append((c, 1.0))
     x, feasible, iterations = _solve_projection_qp(
-        x_nom=x_nom, halfspaces=halfspaces, a_max=a_max, max_iters=max_iters
+        x_nom=x_nom,
+        halfspaces=halfspaces,
+        a_max=a_max,
+        max_iters=max_iters,
+        fixed_mask=fixed_mask,
+        fixed_values=fixed_values,
     )
     return (
         _unpack_or_brake(
@@ -225,6 +301,7 @@ def solve_prediction_based_cbf_qp(
             velocities=velocities,
             a_max=a_max,
             infeasible_fallback=infeasible_fallback,
+            fixed_accelerations=fixed,
         ),
         feasible,
         iterations,

@@ -84,6 +84,7 @@ def _solve_candidate_pcbf(
     safe_distances: dict[tuple[int, int], float],
     drone_ids: list[int],
     config: PCBFConfig,
+    fixed_accelerations: dict[int, np.ndarray],
 ) -> PCBFResult:
     """Fast nonlinear PCBF adaptation for the two-UAV comparison.
 
@@ -102,22 +103,29 @@ def _solve_candidate_pcbf(
     distance = float(np.linalg.norm(relative))
     if distance <= 1e-9:
         return PCBFResult(
-            accelerations=_brake(velocities, config.a_max), feasible=False,
+            accelerations=_brake(
+                velocities, config.a_max, fixed_accelerations
+            ), feasible=False,
             terminal_feasible=False, value=float("inf"), slack_sum=float("inf"),
             iterations=0, status="fail_closed", fail_closed_reason="coincident_pair", plan=None,
         )
     radial = relative / distance
     tangent = np.array([-radial[1], radial[0]], dtype=np.float64)
     index = {drone: idx for idx, drone in enumerate(drone_ids)}
+    controlled = [drone for drone in drone_ids if drone not in fixed_accelerations]
     candidates: list[np.ndarray] = []
     for sign in (1.0, -1.0):
         for magnitude in config.lateral_candidates:
             plan = np.repeat(nominal[None, :, :], config.horizon, axis=0)
             if magnitude > 0.0:
-                # Symmetric lateral separation preserves center-of-mass motion.
-                plan[:, index[i]] += sign * magnitude * tangent
-                plan[:, index[j]] -= sign * magnitude * tangent
-            candidates.append(np.clip(plan, -config.a_max, config.a_max))
+                if i in controlled:
+                    plan[:, index[i]] += sign * magnitude * tangent
+                if j in controlled:
+                    plan[:, index[j]] -= sign * magnitude * tangent
+            plan = np.clip(plan, -config.a_max, config.a_max)
+            for drone, acceleration in fixed_accelerations.items():
+                plan[:, index[drone]] = acceleration
+            candidates.append(plan)
 
     best: tuple[float, float, float, np.ndarray] | None = None
     for plan in candidates:
@@ -134,11 +142,17 @@ def _solve_candidate_pcbf(
         terminal_distance = float(np.linalg.norm(terminal_r))
         terminal_n = terminal_r / terminal_distance if terminal_distance > 1e-9 else radial
         terminal_closing = max(0.0, -float(terminal_n @ terminal_v))
-        # Both vehicles may brake, hence relative braking authority is 2*a_max.
+        relative_braking = config.a_max * sum(
+            drone in controlled for drone in (i, j)
+        )
         recovery_margin = (
             terminal_distance
             - distance_safe
-            - terminal_closing**2 / (4.0 * config.a_max)
+            - (
+                terminal_closing**2 / (2.0 * relative_braking)
+                if relative_braking > 0.0
+                else (float("inf") if terminal_closing > 0.0 else 0.0)
+            )
         )
         terminal_deficit = max(0.0, config.terminal_buffer_m - recovery_margin)
         slack_sum = float(sum(violations))
@@ -156,7 +170,9 @@ def _solve_candidate_pcbf(
     terminal_feasible = terminal_deficit <= config.tolerance
     if not terminal_feasible:
         return PCBFResult(
-            accelerations=_brake(velocities, config.a_max), feasible=False,
+            accelerations=_brake(
+                velocities, config.a_max, fixed_accelerations
+            ), feasible=False,
             terminal_feasible=False, value=score, slack_sum=slack_sum,
             iterations=len(candidates), status="fail_closed",
             fail_closed_reason="terminal_recovery_infeasible", plan=plan,
@@ -169,9 +185,17 @@ def _solve_candidate_pcbf(
     )
 
 
-def _brake(velocities: dict[int, np.ndarray], a_max: float) -> dict[int, np.ndarray]:
+def _brake(
+    velocities: dict[int, np.ndarray],
+    a_max: float,
+    fixed_accelerations: dict[int, np.ndarray] | None = None,
+) -> dict[int, np.ndarray]:
     output = {}
+    fixed_accelerations = fixed_accelerations or {}
     for drone, velocity in velocities.items():
+        if drone in fixed_accelerations:
+            output[drone] = fixed_accelerations[drone].copy()
+            continue
         v = np.asarray(velocity, dtype=np.float64)
         speed = float(np.linalg.norm(v))
         output[drone] = (-a_max * v / speed) if speed > 1e-9 else np.zeros(2)
@@ -308,6 +332,7 @@ def solve_pcbf(
     velocities: dict[int, np.ndarray],
     safe_distances: dict[tuple[int, int], float],
     config: PCBFConfig,
+    fixed_accelerations: dict[int, np.ndarray] | None = None,
 ) -> PCBFResult:
     """Solve the frozen-form PCBF safe MPC problem for a centralized fleet.
 
@@ -321,6 +346,15 @@ def solve_pcbf(
         raise ValueError("PCBF positions, velocities and nominal accelerations must share drone ids")
     if len(drone_ids) < 2:
         raise ValueError("PCBF requires at least two drones")
+    fixed = {
+        drone: np.asarray(value, dtype=np.float64)
+        for drone, value in (fixed_accelerations or {}).items()
+    }
+    unknown = set(fixed) - set(drone_ids)
+    if unknown:
+        raise ValueError(f"fixed acceleration contains unknown drones: {sorted(unknown)}")
+    if any(value.shape != (2,) or not np.all(np.isfinite(value)) for value in fixed.values()):
+        raise ValueError("fixed accelerations must be finite planar vectors")
     directions: dict[tuple[int, int], np.ndarray] = {}
     for i, j in safe_distances:
         if i not in positions or j not in positions:
@@ -329,7 +363,7 @@ def solve_pcbf(
         norm = float(np.linalg.norm(relative))
         if norm <= 1e-9:
             return PCBFResult(
-                accelerations=_brake(velocities, config.a_max), feasible=False,
+                accelerations=_brake(velocities, config.a_max, fixed), feasible=False,
                 terminal_feasible=False, value=float("inf"), slack_sum=float("inf"),
                 iterations=0, status="fail_closed", fail_closed_reason="coincident_pair", plan=None,
             )
@@ -339,13 +373,17 @@ def solve_pcbf(
     nominal = np.stack([np.asarray(nominal_accelerations[i], dtype=np.float64) for i in drone_ids])
     if nominal.shape != (len(drone_ids), 2):
         raise ValueError("PCBF nominal accelerations must be planar vectors")
+    nominal = np.clip(nominal, -config.a_max, config.a_max)
+    for drone, acceleration in fixed.items():
+        nominal[drone_ids.index(drone)] = acceleration
     return _solve_candidate_pcbf(
-        nominal=np.clip(nominal, -config.a_max, config.a_max),
+        nominal=nominal,
         positions=normalized_positions,
         velocities=normalized_velocities,
         safe_distances=safe_distances,
         drone_ids=drone_ids,
         config=config,
+        fixed_accelerations=fixed,
     )
 
     # Retained below as the Gate-0 projected-subgradient reference

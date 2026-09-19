@@ -1163,10 +1163,21 @@ def run_sim_episode(
             rng = np.random.default_rng(seed * 1_000_000 + step)
             for i in env.agent_ids:
                 nominal[i] = nominal[i] + rng.normal(0.0, nominal_noise, 2)
+        fixed_actions = {
+            i: np.zeros(2, dtype=np.float64)
+            for i in env.agent_ids
+            if i in failed or i in aborted
+        }
 
         if local_ras is None:
             filter_started = time.perf_counter()
-            results = ra.filter(snapshots, nominal, t=t, aoi=aoi)
+            results = ra.filter(
+                snapshots,
+                nominal,
+                t=t,
+                aoi=aoi,
+                fixed_actions=fixed_actions,
+            )
             filter_elapsed_ms = (time.perf_counter() - filter_started) * 1000.0
             if ra.last_qp_feasible is not None:
                 qp_solve_steps += 1
@@ -1184,7 +1195,11 @@ def run_sim_episode(
                 )
                 filter_started = time.perf_counter()
                 results[i] = local_ras[i].filter(
-                    local_view, nominal, t=t, aoi=local_aoi
+                    local_view,
+                    nominal,
+                    t=t,
+                    aoi=local_aoi,
+                    fixed_actions=fixed_actions,
                 )[i]
                 filter_elapsed_ms = (time.perf_counter() - filter_started) * 1000.0
                 if local_ras[i].last_qp_feasible is not None:
@@ -2110,6 +2125,12 @@ def run_mqtt_loop(
             if space_time_reservation_coordinator is not None:
                 space_time_reservation_coordinator.record_nominal(nominal)
 
+            fixed_actions = {
+                i: np.zeros(2, dtype=np.float64)
+                for i in drone_ids
+                if i in failed or i in overrides.aborted
+            }
+
             # The CBF boundary grows with the age of the telemetry used for
             # filtering.  Feed the measured round-trip age instead of assuming
             # zero latency, otherwise the live PX4 position-control loop can
@@ -2143,7 +2164,13 @@ def run_mqtt_loop(
             ra_states = _propagate_states(ra_states, ages)
             solve_started = time.perf_counter()
             if local_ras is None:
-                results = ra.filter(ra_states, nominal, t=t, aoi=aoi)
+                results = ra.filter(
+                    ra_states,
+                    nominal,
+                    t=t,
+                    aoi=aoi,
+                    fixed_actions=fixed_actions,
+                )
             else:
                 results = {}
                 for drone in drone_ids:
@@ -2154,7 +2181,11 @@ def run_mqtt_loop(
                         now_ms=timestamp_ms,
                     )
                     results[drone] = local_ras[drone].filter(
-                        local_view, nominal, t=t, aoi=local_aoi
+                        local_view,
+                        nominal,
+                        t=t,
+                        aoi=local_aoi,
+                        fixed_actions=fixed_actions,
                     )[drone]
             solve_elapsed_s = time.perf_counter() - solve_started
             ra_solve_latency_ms.append(solve_elapsed_s * 1000.0)
@@ -2211,8 +2242,13 @@ def run_mqtt_loop(
                     timestamp_ms=timestamp_ms,
                 )
                 if supervisor_state.active:
-                    controlled_drones = (
+                    backup_candidates = (
                         supervisor_state.backup_drones or tuple(drone_ids)
+                    )
+                    controlled_drones = tuple(
+                        drone
+                        for drone in backup_candidates
+                        if results[drone].control_authority
                     )
                     for i in controlled_drones:
                         backup = deterministic_backup_velocity(
@@ -2411,6 +2447,12 @@ def run_mqtt_loop(
                         "pcbf_terminal_feasible": results[i].pcbf_terminal_feasible,
                         "pcbf_slack_sum": results[i].pcbf_slack_sum,
                         "pcbf_fail_closed_reason": results[i].pcbf_fail_closed_reason,
+                        "control_authority": results[i].control_authority,
+                        "fixed_action": (
+                            list(results[i].fixed_action)
+                            if results[i].fixed_action is not None
+                            else None
+                        ),
                         "command_authority": command_authority,
                         "ra_bypass": ra_bypass,
                         "c1_admission_phase": (

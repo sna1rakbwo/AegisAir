@@ -49,8 +49,17 @@ def _pair_constraint(
     return c, b
 
 
-def _project_box(x: np.ndarray, a_max: float) -> np.ndarray:
-    return np.clip(x, -a_max, a_max)
+def _project_box(
+    x: np.ndarray,
+    a_max: float,
+    *,
+    fixed_mask: np.ndarray | None = None,
+    fixed_values: np.ndarray | None = None,
+) -> np.ndarray:
+    projected = np.clip(x, -a_max, a_max)
+    if fixed_mask is not None:
+        projected[fixed_mask] = fixed_values[fixed_mask]
+    return projected
 
 
 def _project_halfspace(x: np.ndarray, c: np.ndarray, b: float) -> np.ndarray:
@@ -60,6 +69,56 @@ def _project_halfspace(x: np.ndarray, c: np.ndarray, b: float) -> np.ndarray:
         if norm_sq > 1e-12:
             x = x + (residual / norm_sq) * c
     return x
+
+
+def _fixed_coordinates(
+    *,
+    drone_ids: list[int],
+    fixed_accelerations: dict[int, np.ndarray] | None,
+) -> tuple[np.ndarray, np.ndarray, dict[int, np.ndarray]]:
+    fixed = {
+        drone: np.asarray(value, dtype=np.float64)
+        for drone, value in (fixed_accelerations or {}).items()
+    }
+    unknown = set(fixed) - set(drone_ids)
+    if unknown:
+        raise ValueError(f"fixed acceleration contains unknown drones: {sorted(unknown)}")
+    mask = np.zeros(2 * len(drone_ids), dtype=bool)
+    values = np.zeros(2 * len(drone_ids), dtype=np.float64)
+    for index, drone in enumerate(drone_ids):
+        if drone not in fixed:
+            continue
+        if fixed[drone].shape != (2,) or not np.all(np.isfinite(fixed[drone])):
+            raise ValueError("fixed accelerations must be finite planar vectors")
+        mask[2 * index : 2 * index + 2] = True
+        values[2 * index : 2 * index + 2] = fixed[drone]
+    return mask, values, fixed
+
+
+def _fallback_accelerations(
+    *,
+    x: np.ndarray,
+    feasible: bool,
+    drone_ids: list[int],
+    velocities: dict[int, np.ndarray],
+    a_max: float,
+    infeasible_fallback: str,
+    fixed_accelerations: dict[int, np.ndarray],
+) -> dict[int, np.ndarray]:
+    output: dict[int, np.ndarray] = {}
+    for index, drone in enumerate(drone_ids):
+        if drone in fixed_accelerations:
+            output[drone] = fixed_accelerations[drone].copy()
+        elif feasible:
+            output[drone] = x[2 * index : 2 * index + 2].copy()
+        else:
+            velocity = np.asarray(velocities[drone][:2], dtype=np.float64)
+            speed = float(np.linalg.norm(velocity))
+            if infeasible_fallback == "max_brake" and speed > 1e-9:
+                output[drone] = -a_max * velocity / speed
+            else:
+                output[drone] = np.clip(-velocity, -a_max, a_max)
+    return output
 
 
 def solve_acceleration_qp(
@@ -74,6 +133,7 @@ def solve_acceleration_qp(
     max_iters: int = 3000,
     tol: float = 1e-7,
     infeasible_fallback: str = "velocity_cancel",
+    fixed_accelerations: dict[int, np.ndarray] | None = None,
 ) -> tuple[dict[int, np.ndarray], bool, int]:
     """Solve one centralized QP for every drone's safe acceleration.
 
@@ -86,10 +146,14 @@ def solve_acceleration_qp(
     drone_ids = sorted(positions)
     n_agents = len(drone_ids)
     index = {drone: idx for idx, drone in enumerate(drone_ids)}
+    fixed_mask, fixed_values, fixed = _fixed_coordinates(
+        drone_ids=drone_ids, fixed_accelerations=fixed_accelerations
+    )
 
     x = np.zeros(2 * n_agents, dtype=np.float64)
     for idx, drone in enumerate(drone_ids):
         x[2 * idx : 2 * idx + 2] = np.asarray(a_nom[drone], dtype=np.float64)
+    x[fixed_mask] = fixed_values[fixed_mask]
 
     halfspaces: list[tuple[np.ndarray, float]] = []
     for (i, j), s in d_safe.items():
@@ -115,39 +179,54 @@ def solve_acceleration_qp(
     for iterations in range(1, max_iters + 1):
         previous = x0.copy()
         cur = x0
+        correction_change = 0.0
         for idx in range(len(halfspaces) + 1):
             y = cur + corrections[idx]
             if idx == 0:
-                proj = _project_box(y, a_max)
+                proj = _project_box(
+                    y,
+                    a_max,
+                    fixed_mask=fixed_mask,
+                    fixed_values=fixed_values,
+                )
             else:
                 c, b = halfspaces[idx - 1]
                 proj = _project_halfspace(y, c, b)
-            corrections[idx] = y - proj
+            correction = y - proj
+            correction_change = max(
+                correction_change,
+                float(np.linalg.norm(correction - corrections[idx])),
+            )
+            corrections[idx] = correction
             cur = proj
         x0 = cur
-        if float(np.linalg.norm(x0 - previous)) <= tol:
+        if (
+            float(np.linalg.norm(x0 - previous)) <= tol
+            and correction_change <= tol
+        ):
             break
 
     feasible = True
-    box_ok = np.all(np.abs(x0) <= a_max + 1e-6)
+    box_ok = np.all(np.abs(x0[~fixed_mask]) <= a_max + 1e-6)
+    fixed_ok = np.allclose(
+        x0[fixed_mask], fixed_values[fixed_mask], atol=1e-6, rtol=0.0
+    )
     for c, b in halfspaces:
         if float(np.dot(c, x0)) < b - 1e-6:
             feasible = False
             break
-    if not box_ok:
+    if not box_ok or not fixed_ok:
         feasible = False
 
-    a_safe: dict[int, np.ndarray] = {}
-    for idx, drone in enumerate(drone_ids):
-        if feasible:
-            a_safe[drone] = x0[2 * idx : 2 * idx + 2].copy()
-        else:
-            velocity = np.asarray(velocities[drone][:2], dtype=np.float64)
-            speed = float(np.linalg.norm(velocity))
-            if infeasible_fallback == "max_brake" and speed > 1e-9:
-                a_safe[drone] = -a_max * velocity / speed
-            else:
-                a_safe[drone] = np.clip(-velocity, -a_max, a_max)
+    a_safe = _fallback_accelerations(
+        x=x0,
+        feasible=feasible,
+        drone_ids=drone_ids,
+        velocities=velocities,
+        a_max=a_max,
+        infeasible_fallback=infeasible_fallback,
+        fixed_accelerations=fixed,
+    )
     return a_safe, feasible, iterations
 
 
@@ -159,6 +238,7 @@ def minimum_acceleration_box_reserve(
     k1: float,
     k2: float,
     a_max: float,
+    fixed_accelerations: dict[int, np.ndarray] | None = None,
 ) -> float:
     """Return the minimum normalized HOCBF feasibility headroom.
 
@@ -171,6 +251,9 @@ def minimum_acceleration_box_reserve(
     """
     drone_ids = sorted(positions)
     index = {drone: idx for idx, drone in enumerate(drone_ids)}
+    fixed_mask, fixed_values, _ = _fixed_coordinates(
+        drone_ids=drone_ids, fixed_accelerations=fixed_accelerations
+    )
     reserves = []
     for (i, j), safe_distance in d_safe.items():
         c, b = _pair_constraint(
@@ -185,11 +268,13 @@ def minimum_acceleration_box_reserve(
             k1=k1,
             k2=k2,
         )
-        maximum_lhs = a_max * float(np.sum(np.abs(c)))
-        if maximum_lhs <= 1e-12:
-            reserves.append(float("-inf") if b > 0.0 else float("inf"))
+        fixed_lhs = float(np.dot(c[fixed_mask], fixed_values[fixed_mask]))
+        available_lhs = a_max * float(np.sum(np.abs(c[~fixed_mask])))
+        maximum_lhs = fixed_lhs + available_lhs
+        if available_lhs <= 1e-12:
+            reserves.append(float("-inf") if maximum_lhs < b else float("inf"))
         else:
-            reserves.append((maximum_lhs - b) / maximum_lhs)
+            reserves.append((maximum_lhs - b) / available_lhs)
     return min(reserves, default=float("inf"))
 
 
@@ -222,6 +307,7 @@ def solve_robust_sampled_data_qp(
     beta: dict[int, tuple[float, float]],
     command_scale: float | None = None,
     max_iters: int = 3000,
+    fixed_accelerations: dict[int, np.ndarray] | None = None,
 ) -> tuple[dict[int, np.ndarray], bool, int]:
     """Robust projected-barrier sampled-data QP with tau-interval uncertainty.
 
@@ -237,10 +323,14 @@ def solve_robust_sampled_data_qp(
         raise ValueError("command_scale must be positive")
     n_agents = len(drone_ids)
     index = {drone: idx for idx, drone in enumerate(drone_ids)}
+    fixed_mask, fixed_values, fixed = _fixed_coordinates(
+        drone_ids=drone_ids, fixed_accelerations=fixed_accelerations
+    )
 
     x = np.zeros(2 * n_agents, dtype=np.float64)
     for idx, drone in enumerate(drone_ids):
         x[2 * idx : 2 * idx + 2] = np.asarray(a_nom[drone], dtype=np.float64)
+    x[fixed_mask] = fixed_values[fixed_mask]
 
     halfspaces: list[tuple[np.ndarray, float]] = []
     for (i, j) in sorted(s_now):
@@ -280,7 +370,12 @@ def solve_robust_sampled_data_qp(
         for idx in range(len(halfspaces) + 1):
             y = cur + corrections[idx]
             if idx == 0:
-                proj = _project_box(y, a_max)
+                proj = _project_box(
+                    y,
+                    a_max,
+                    fixed_mask=fixed_mask,
+                    fixed_values=fixed_values,
+                )
             else:
                 c, b = halfspaces[idx - 1]
                 proj = _project_halfspace(y, c, b)
@@ -288,22 +383,24 @@ def solve_robust_sampled_data_qp(
             cur = proj
         x0 = cur
 
-    feasible = np.all(np.abs(x0) <= a_max + 1e-6)
+    feasible = bool(np.all(np.abs(x0[~fixed_mask]) <= a_max + 1e-6))
+    feasible = feasible and bool(
+        np.allclose(x0[fixed_mask], fixed_values[fixed_mask], atol=1e-6, rtol=0.0)
+    )
     for c, b in halfspaces:
         if float(np.dot(c, x0)) < b - 1e-6:
             feasible = False
             break
 
-    a_safe: dict[int, np.ndarray] = {}
-    for idx, drone in enumerate(drone_ids):
-        if feasible:
-            a_safe[drone] = x0[2 * idx : 2 * idx + 2].copy()
-        else:
-            a_safe[drone] = np.clip(
-                -np.asarray(velocities[drone][:2], dtype=np.float64),
-                -a_max,
-                a_max,
-            )
+    a_safe = _fallback_accelerations(
+        x=x0,
+        feasible=feasible,
+        drone_ids=drone_ids,
+        velocities=velocities,
+        a_max=a_max,
+        infeasible_fallback="velocity_cancel",
+        fixed_accelerations=fixed,
+    )
     return a_safe, feasible, max_iters
 
 
@@ -319,6 +416,7 @@ def solve_sampled_data_qp(
     a_max: float,
     alpha: float = 1.0,
     max_iters: int = 3000,
+    fixed_accelerations: dict[int, np.ndarray] | None = None,
 ) -> tuple[dict[int, np.ndarray], bool, int]:
     """Centralized sampled-data acceleration QP.
 
@@ -333,10 +431,14 @@ def solve_sampled_data_qp(
     drone_ids = sorted(positions)
     n_agents = len(drone_ids)
     index = {drone: idx for idx, drone in enumerate(drone_ids)}
+    fixed_mask, fixed_values, fixed = _fixed_coordinates(
+        drone_ids=drone_ids, fixed_accelerations=fixed_accelerations
+    )
 
     x = np.zeros(2 * n_agents, dtype=np.float64)
     for idx, drone in enumerate(drone_ids):
         x[2 * idx : 2 * idx + 2] = np.asarray(a_nom[drone], dtype=np.float64)
+    x[fixed_mask] = fixed_values[fixed_mask]
     x_nom = x.copy()
 
     halfspaces: list[tuple[np.ndarray, float]] = []
@@ -370,7 +472,12 @@ def solve_sampled_data_qp(
         for idx in range(len(halfspaces) + 1):
             y = cur + corrections[idx]
             if idx == 0:
-                proj = _project_box(y, a_max)
+                proj = _project_box(
+                    y,
+                    a_max,
+                    fixed_mask=fixed_mask,
+                    fixed_values=fixed_values,
+                )
             else:
                 c, b = halfspaces[idx - 1]
                 proj = _project_halfspace(y, c, b)
@@ -378,20 +485,22 @@ def solve_sampled_data_qp(
             cur = proj
         x0 = cur
 
-    feasible = np.all(np.abs(x0) <= a_max + 1e-6)
+    feasible = bool(np.all(np.abs(x0[~fixed_mask]) <= a_max + 1e-6))
+    feasible = feasible and bool(
+        np.allclose(x0[fixed_mask], fixed_values[fixed_mask], atol=1e-6, rtol=0.0)
+    )
     for c, b in halfspaces:
         if float(np.dot(c, x0)) < b - 1e-6:
             feasible = False
             break
 
-    a_safe: dict[int, np.ndarray] = {}
-    for idx, drone in enumerate(drone_ids):
-        if feasible:
-            a_safe[drone] = x0[2 * idx : 2 * idx + 2].copy()
-        else:
-            a_safe[drone] = np.clip(
-                -np.asarray(velocities[drone][:2], dtype=np.float64),
-                -a_max,
-                a_max,
-            )
+    a_safe = _fallback_accelerations(
+        x=x0,
+        feasible=feasible,
+        drone_ids=drone_ids,
+        velocities=velocities,
+        a_max=a_max,
+        infeasible_fallback="velocity_cancel",
+        fixed_accelerations=fixed,
+    )
     return a_safe, feasible, max_iters

@@ -69,6 +69,42 @@ class CbfTest(unittest.TestCase):
 
 
 class RuntimeAssuranceHocbfTest(unittest.TestCase):
+    def test_pb_filter_pins_published_action_after_authority_revocation(self) -> None:
+        ra = RuntimeAssurance(
+            params=RuntimeAssuranceParams(
+                d0=0.8,
+                beta=0.0,
+                degradation_dt=0.05,
+            ),
+            perception_sigma=0.0,
+            sampled_data=True,
+            sampled_data_method="pb_cbf",
+            constraint_boundary="static",
+            pb_alpha=0.5,
+            pb_braking_accel=2.0,
+            a_max=2.0,
+            command_feedforward_tau_s=1.0,
+        )
+        snapshots = {
+            2: DroneSnapshot(
+                2, (0.0, 0.0, 0.0), velocity=(1.0, 0.0, 0.0)
+            ),
+            3: DroneSnapshot(
+                3, (1.2, 0.0, 0.0), velocity=(0.0, 0.0, 0.0)
+            ),
+        }
+        results = ra.filter(
+            snapshots,
+            {2: np.array([1.0, 0.0]), 3: np.zeros(2)},
+            t=0.0,
+            fixed_actions={3: np.zeros(2)},
+        )
+        self.assertTrue(results[2].feasible)
+        np.testing.assert_allclose(results[2].a_safe, [-1.85, 0.0], atol=1e-7)
+        np.testing.assert_allclose(results[3].safe_action, [0.0, 0.0])
+        self.assertFalse(results[3].control_authority)
+        self.assertEqual(results[3].fixed_action, (0.0, 0.0))
+
     def test_hocbf_filter_is_a_real_method(self) -> None:
         ra = RuntimeAssurance(use_hocbf=True)
         snapshots = {

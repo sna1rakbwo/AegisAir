@@ -59,6 +59,19 @@ class PCBFTest(unittest.TestCase):
         np.testing.assert_allclose(result.accelerations[0], np.array([-2.0, 0.0]))
         np.testing.assert_allclose(result.accelerations[1], np.array([2.0, 0.0]))
 
+    def test_fail_closed_preserves_revoked_agent_input(self) -> None:
+        fixed = np.array([3.0, 0.0])
+        result = solve_pcbf(
+            nominal_accelerations={0: np.zeros(2), 1: fixed},
+            positions={0: np.zeros(2), 1: np.zeros(2)},
+            velocities={0: np.array([1.0, 0.0]), 1: np.zeros(2)},
+            safe_distances={(0, 1): 2.0},
+            config=self.config,
+            fixed_accelerations={1: fixed},
+        )
+        self.assertFalse(result.feasible)
+        np.testing.assert_array_equal(result.accelerations[1], fixed)
+
     def test_replanning_after_first_control_remains_terminal_feasible(self) -> None:
         positions = {0: np.array([-3.0, 0.0]), 1: np.array([3.0, 0.0])}
         velocities = {0: np.zeros(2), 1: np.zeros(2)}

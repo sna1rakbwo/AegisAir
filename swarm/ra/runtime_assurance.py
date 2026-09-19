@@ -62,6 +62,8 @@ class FilterResult:
     pcbf_terminal_feasible: bool | None = None
     pcbf_slack_sum: float | None = None
     pcbf_fail_closed_reason: str | None = None
+    control_authority: bool = True
+    fixed_action: tuple[float, float] | None = None
 
 
 class RuntimeAssurance:
@@ -251,11 +253,24 @@ class RuntimeAssurance:
         nominal_actions: dict[int, np.ndarray],
         t: float,
         aoi: dict[tuple[int, int], float] | None = None,
+        fixed_actions: dict[int, np.ndarray] | None = None,
     ) -> dict[int, FilterResult]:
+        """Filter commands while keeping revoked agents as fixed obstacles.
+
+        ``fixed_actions`` contains the exact planar velocity commands that the
+        execution layer will publish for agents without control authority.
+        These agents remain in every pairwise constraint, but joint solvers
+        cannot change their inputs or credit their control budget.
+        """
+        fixed_actions = _normalize_fixed_actions(snapshots, fixed_actions)
         if self.sampled_data:
-            return self._filter_sampled_data(snapshots, nominal_actions, t, aoi)
+            return self._filter_sampled_data(
+                snapshots, nominal_actions, t, aoi, fixed_actions
+            )
         if self.use_hocbf:
-            return self._filter_hocbf(snapshots, nominal_actions, t, aoi)
+            return self._filter_hocbf(
+                snapshots, nominal_actions, t, aoi, fixed_actions
+            )
         aoi = aoi or {}
         results: dict[int, FilterResult] = {}
 
@@ -338,7 +353,11 @@ class RuntimeAssurance:
                     worst_ttsb = pred.ttsb
                     worst_confidence = pred.reliability_score
 
-            u_safe = project_safe_action(u_nom, constraints, self.v_max)
+            u_safe = (
+                fixed_actions[drone_id]
+                if drone_id in fixed_actions
+                else project_safe_action(u_nom, constraints, self.v_max)
+            )
             intervened = bool(np.linalg.norm(u_safe - u_nom) > 1e-6)
 
             if intervened:
@@ -371,6 +390,12 @@ class RuntimeAssurance:
                 worst_pair=worst_pair,
                 intervened=intervened,
                 proactive=worst_pred_rho < self.params.rho_pred_threshold,
+                control_authority=drone_id not in fixed_actions,
+                fixed_action=(
+                    tuple(float(value) for value in fixed_actions[drone_id])
+                    if drone_id in fixed_actions
+                    else None
+                ),
             )
         return results
 
@@ -380,6 +405,7 @@ class RuntimeAssurance:
         nominal_actions: dict[int, np.ndarray],
         t: float,
         aoi: dict[tuple[int, int], float] | None,
+        fixed_actions: dict[int, np.ndarray],
     ) -> dict[int, FilterResult]:
         """Sampled-data acceleration-aware filter."""
         aoi = aoi or {}
@@ -416,14 +442,23 @@ class RuntimeAssurance:
             )
             for i in drone_ids
         }
+        fixed_accelerations = _fixed_accelerations_from_actions(
+            fixed_actions=fixed_actions,
+            velocities=velocities,
+            command_scale=command_scale,
+        )
 
         a_nom: dict[int, np.ndarray] = {}
         for i in drone_ids:
             v_nom = np.asarray(nominal_actions[i][:2], dtype=np.float64)
-            a_nom[i] = np.clip(
-                self.kv * (v_nom - velocities[i]),
-                -self.a_max,
-                self.a_max,
+            a_nom[i] = (
+                fixed_accelerations[i].copy()
+                if i in fixed_accelerations
+                else np.clip(
+                    self.kv * (v_nom - velocities[i]),
+                    -self.a_max,
+                    self.a_max,
+                )
             )
 
         s_now: dict[tuple[int, int], float] = {}
@@ -554,6 +589,7 @@ class RuntimeAssurance:
                     projection_iterations=self.pcbf_config.projection_iterations,
                     tolerance=self.pcbf_config.tolerance,
                 ),
+                fixed_accelerations=fixed_accelerations,
             )
             a_safe = pcbf_result.accelerations
             feasible = pcbf_result.feasible
@@ -573,6 +609,7 @@ class RuntimeAssurance:
                 command_scale=command_scale,
                 max_iters=self.qp_max_iters,
                 infeasible_fallback=self.sampled_data_infeasible_fallback,
+                fixed_accelerations=fixed_accelerations,
             )
         elif self.sampled_data_method == "pb_cbf":
             a_safe, feasible, _ = solve_prediction_based_cbf_qp(
@@ -585,6 +622,7 @@ class RuntimeAssurance:
                 a_max=self.a_max,
                 max_iters=self.qp_max_iters,
                 infeasible_fallback=self.sampled_data_infeasible_fallback,
+                fixed_accelerations=fixed_accelerations,
             )
         elif self.execution_model == "legacy_trapezoidal":
             alpha = (
@@ -603,6 +641,7 @@ class RuntimeAssurance:
                 a_max=self.a_max,
                 alpha=alpha,
                 max_iters=self.qp_max_iters,
+                fixed_accelerations=fixed_accelerations,
             )
         else:
             a_safe, feasible, _ = solve_robust_sampled_data_qp(
@@ -617,6 +656,7 @@ class RuntimeAssurance:
                 beta=beta,
                 command_scale=command_scale,
                 max_iters=self.qp_max_iters,
+                fixed_accelerations=fixed_accelerations,
             )
         self.qp_solve_count += 1
         if not feasible:
@@ -648,10 +688,14 @@ class RuntimeAssurance:
                     worst_conf = pred.reliability_score
 
             v_nom = np.asarray(nominal_actions[i][:2], dtype=np.float64)
-            v_safe = np.clip(
-                velocities[i] + a_safe[i] * command_scale,
-                -self.v_max,
-                self.v_max,
+            v_safe = (
+                fixed_actions[i].copy()
+                if i in fixed_actions
+                else np.clip(
+                    velocities[i] + a_safe[i] * command_scale,
+                    -self.v_max,
+                    self.v_max,
+                )
             )
             a_nom_i = np.asarray(a_nom[i], dtype=np.float64)
             a_safe_i = np.asarray(a_safe[i], dtype=np.float64)
@@ -701,6 +745,12 @@ class RuntimeAssurance:
                 pcbf_terminal_feasible=(pcbf_result.terminal_feasible if pcbf_result is not None else None),
                 pcbf_slack_sum=(pcbf_result.slack_sum if pcbf_result is not None else None),
                 pcbf_fail_closed_reason=(pcbf_result.fail_closed_reason if pcbf_result is not None else None),
+                control_authority=i not in fixed_actions,
+                fixed_action=(
+                    tuple(float(value) for value in fixed_actions[i])
+                    if i in fixed_actions
+                    else None
+                ),
             )
         return results
 
@@ -710,6 +760,7 @@ class RuntimeAssurance:
         nominal_actions: dict[int, np.ndarray],
         t: float,
         aoi: dict[tuple[int, int], float] | None,
+        fixed_actions: dict[int, np.ndarray],
     ) -> dict[int, FilterResult]:
         """Acceleration-aware centralized HOCBF filter."""
         aoi = aoi or {}
@@ -739,6 +790,11 @@ class RuntimeAssurance:
             )
             for i in drone_ids
         }
+        fixed_accelerations = _fixed_accelerations_from_actions(
+            fixed_actions=fixed_actions,
+            velocities=velocities,
+            command_scale=command_scale,
+        )
 
         d_safe_map: dict[tuple[int, int], float] = {}
         static_safe_map: dict[tuple[int, int], float] = {}
@@ -794,10 +850,14 @@ class RuntimeAssurance:
         a_nom: dict[int, np.ndarray] = {}
         for i in drone_ids:
             v_nom = np.asarray(nominal_actions[i][:2], dtype=np.float64)
-            a_nom[i] = np.clip(
-                self.kv * (v_nom - velocities[i]),
-                -self.a_max,
-                self.a_max,
+            a_nom[i] = (
+                fixed_accelerations[i].copy()
+                if i in fixed_accelerations
+                else np.clip(
+                    self.kv * (v_nom - velocities[i]),
+                    -self.a_max,
+                    self.a_max,
+                )
             )
 
         if self.hocbf_boundary_guard > 0.0 or self.hocbf_boundary_buffer_m > 0.0:
@@ -832,6 +892,7 @@ class RuntimeAssurance:
             k2=self.k2,
             a_max=self.a_max,
             infeasible_fallback=self.hocbf_infeasible_fallback,
+            fixed_accelerations=fixed_accelerations,
         )
         feasibility_reserve = minimum_acceleration_box_reserve(
             positions=positions,
@@ -840,6 +901,7 @@ class RuntimeAssurance:
             k1=self.k1,
             k2=self.k2,
             a_max=self.a_max,
+            fixed_accelerations=fixed_accelerations,
         )
 
         predictive_feasible: bool | None = None
@@ -882,15 +944,26 @@ class RuntimeAssurance:
                     + execution_alpha * applied_acceleration[i] * command_scale
                     for i in drone_ids
                 }
+                predicted_fixed_accelerations = _fixed_accelerations_from_actions(
+                    fixed_actions=fixed_actions,
+                    velocities=predicted_velocities,
+                    command_scale=command_scale,
+                )
                 predicted_a_nom = {
-                    i: np.clip(
-                        self.kv
-                        * (
-                            np.asarray(nominal_actions[i][:2], dtype=np.float64)
-                            - predicted_velocities[i]
-                        ),
-                        -self.a_max,
-                        self.a_max,
+                    i: (
+                        predicted_fixed_accelerations[i].copy()
+                        if i in predicted_fixed_accelerations
+                        else np.clip(
+                            self.kv
+                            * (
+                                np.asarray(
+                                    nominal_actions[i][:2], dtype=np.float64
+                                )
+                                - predicted_velocities[i]
+                            ),
+                            -self.a_max,
+                            self.a_max,
+                        )
                     )
                     for i in drone_ids
                 }
@@ -937,6 +1010,7 @@ class RuntimeAssurance:
                     k2=self.k2,
                     a_max=self.a_max,
                     infeasible_fallback=self.hocbf_infeasible_fallback,
+                    fixed_accelerations=predicted_fixed_accelerations,
                 )
                 if not predictive_feasible:
                     break
@@ -987,6 +1061,7 @@ class RuntimeAssurance:
                 a_max=self.a_max,
                 max_iters=self.qp_max_iters,
                 infeasible_fallback="max_brake",
+                fixed_accelerations=fixed_accelerations,
             )
             feasible = recovery_feasible
             selected_filter = "pb_recovery"
@@ -1033,10 +1108,14 @@ class RuntimeAssurance:
                     worst_conf = pred.reliability_score
 
             v_nom = np.asarray(nominal_actions[i][:2], dtype=np.float64)
-            v_safe = np.clip(
-                velocities[i] + a_safe[i] * command_scale,
-                -self.v_max,
-                self.v_max,
+            v_safe = (
+                fixed_actions[i].copy()
+                if i in fixed_actions
+                else np.clip(
+                    velocities[i] + a_safe[i] * command_scale,
+                    -self.v_max,
+                    self.v_max,
+                )
             )
             intervened = bool(np.linalg.norm(a_safe[i] - a_nom[i]) > 1e-6)
             if intervened:
@@ -1094,8 +1173,48 @@ class RuntimeAssurance:
                     self._hocbf_recovery_reason if recovery_active else None
                 ),
                 feasibility_reserve=float(feasibility_reserve),
+                control_authority=i not in fixed_actions,
+                fixed_action=(
+                    tuple(float(value) for value in fixed_actions[i])
+                    if i in fixed_actions
+                    else None
+                ),
             )
         return results
+
+
+def _normalize_fixed_actions(
+    snapshots: dict[int, object],
+    fixed_actions: dict[int, np.ndarray] | None,
+) -> dict[int, np.ndarray]:
+    normalized = {
+        drone: np.asarray(action, dtype=np.float64)
+        for drone, action in (fixed_actions or {}).items()
+    }
+    unknown = set(normalized) - set(snapshots)
+    if unknown:
+        raise ValueError(f"fixed action contains unknown drones: {sorted(unknown)}")
+    if any(
+        action.shape != (2,) or not np.all(np.isfinite(action))
+        for action in normalized.values()
+    ):
+        raise ValueError("fixed actions must be finite planar vectors")
+    return normalized
+
+
+def _fixed_accelerations_from_actions(
+    *,
+    fixed_actions: dict[int, np.ndarray],
+    velocities: dict[int, np.ndarray],
+    command_scale: float,
+) -> dict[int, np.ndarray]:
+    if command_scale <= 0.0:
+        raise ValueError("command scale must be positive")
+    return {
+        drone: (action - velocities[drone]) / command_scale
+        for drone, action in fixed_actions.items()
+    }
+
 
 def _projected_sigma(snapshot, direction: np.ndarray, default: float) -> float:
     """Return the covariance-derived sigma along ``direction``, or the default."""
