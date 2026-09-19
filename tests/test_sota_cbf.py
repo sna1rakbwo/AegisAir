@@ -5,6 +5,7 @@ import numpy as np
 from swarm.ra.hocbf import beta_of_tau
 from swarm.ra.sota_cbf import (
     _solve_projection_qp,
+    minimum_prediction_based_constraint_slack,
     solve_prediction_based_cbf_qp,
     solve_zocbf_qp,
 )
@@ -151,6 +152,30 @@ class SotaCbfTest(unittest.TestCase):
         self.assertTrue(feasible)
         self.assertLess(safe[2][0], self.nominal[2][0])
         self.assertGreater(safe[3][0], self.nominal[3][0])
+        self.assertGreaterEqual(
+            minimum_prediction_based_constraint_slack(
+                accelerations=safe,
+                positions=self.positions,
+                velocities=self.velocities,
+                static_distance={(2, 3): 0.5},
+                alpha=2.0,
+                braking_accel=2.0,
+                a_max=3.0,
+            ),
+            -1e-6,
+        )
+        self.assertLess(
+            minimum_prediction_based_constraint_slack(
+                accelerations=self.nominal,
+                positions=self.positions,
+                velocities=self.velocities,
+                static_distance={(2, 3): 0.5},
+                alpha=2.0,
+                braking_accel=2.0,
+                a_max=3.0,
+            ),
+            0.0,
+        )
 
     def test_pb_cbf_finds_feasible_oblique_input_at_box_boundary(self):
         # This safe initial state gives [0.5, 1, -0.5, -1] @ A >= 1.

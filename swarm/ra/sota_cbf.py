@@ -306,3 +306,74 @@ def solve_prediction_based_cbf_qp(
         feasible,
         iterations,
     )
+
+
+def minimum_prediction_based_constraint_slack(
+    *,
+    accelerations: dict[int, np.ndarray],
+    positions: dict[int, np.ndarray],
+    velocities: dict[int, np.ndarray],
+    static_distance: dict[tuple[int, int], float],
+    alpha: float,
+    braking_accel: float,
+    a_max: float,
+    box_constrained_drones: set[int] | None = None,
+) -> float:
+    """Evaluate actual joint acceleration against radial PB-CBF and box."""
+    if braking_accel <= 0.0 or alpha <= 0.0:
+        raise ValueError("PB-CBF parameters must be positive")
+    drone_ids = sorted(positions)
+    if set(accelerations) != set(drone_ids):
+        raise ValueError("accelerations must cover every constrained drone")
+    packed = np.concatenate(
+        [np.asarray(accelerations[drone], dtype=np.float64) for drone in drone_ids]
+    )
+    if packed.shape != (2 * len(drone_ids),) or not np.all(np.isfinite(packed)):
+        raise ValueError("accelerations must be finite planar vectors")
+    index = {drone: idx for idx, drone in enumerate(drone_ids)}
+    constrained = (
+        set(drone_ids)
+        if box_constrained_drones is None
+        else set(box_constrained_drones)
+    )
+    if not constrained <= set(drone_ids):
+        raise ValueError("box constraints contain an unknown drone")
+    slacks = [
+        float(
+            a_max
+            - max(
+                np.max(np.abs(accelerations[drone]))
+                for drone in constrained
+            )
+        )
+    ] if constrained else []
+    for (i, j), safe_distance in sorted(static_distance.items()):
+        r = np.asarray(positions[i]) - np.asarray(positions[j])
+        relative_velocity = np.asarray(velocities[i]) - np.asarray(velocities[j])
+        distance = float(np.linalg.norm(r))
+        direction = r / distance if distance > 1e-9 else np.array([1.0, 0.0])
+        radial_velocity = float(np.dot(direction, relative_velocity))
+        tangential_rate = (
+            (
+                float(np.dot(relative_velocity, relative_velocity))
+                - radial_velocity**2
+            )
+            / distance
+            if distance > 1e-9
+            else 0.0
+        )
+        closing = min(radial_velocity, 0.0)
+        barrier = distance - safe_distance - closing**2 / (2.0 * braking_accel)
+        if closing < 0.0:
+            coefficient = -closing / braking_accel
+            relative_acceleration = (
+                packed[2 * index[i] : 2 * index[i] + 2]
+                - packed[2 * index[j] : 2 * index[j] + 2]
+            )
+            lhs = coefficient * float(np.dot(direction, relative_acceleration))
+            drift = radial_velocity + coefficient * tangential_rate
+            bound = -alpha * barrier - drift
+            slacks.append(lhs - bound)
+        elif radial_velocity + alpha * barrier < 0.0:
+            slacks.append(-1.0)
+    return min(slacks, default=float("inf"))

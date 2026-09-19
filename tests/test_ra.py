@@ -142,6 +142,86 @@ class RuntimeAssuranceHocbfTest(unittest.TestCase):
             self.assertIsNotNone(result.feasible)
             self.assertGreater(np.linalg.norm(result.a_safe), 0.0)
 
+    def test_published_hocbf_audit_checks_clipped_joint_command(self) -> None:
+        command_scale = 0.7
+        ra = RuntimeAssurance(
+            params=RuntimeAssuranceParams(
+                d0=0.8,
+                beta=0.0,
+                degradation_dt=0.05,
+            ),
+            perception_sigma=0.0,
+            use_hocbf=True,
+            a_max=2.0,
+            v_max=1.5,
+            command_feedforward_tau_s=command_scale,
+        )
+        snapshots = {
+            0: DroneSnapshot(0, (-4.0, 0.0, 2.5), velocity=(0.0, 0.0, 0.0)),
+            1: DroneSnapshot(1, (4.0, 0.0, 2.5), velocity=(0.0, 0.0, 0.0)),
+        }
+        results = ra.filter(
+            snapshots,
+            {0: np.array([1.5, 1.5]), 1: np.array([-1.5, -1.5])},
+            t=0.0,
+        )
+        published_accelerations = {
+            drone: np.asarray(result.safe_action) / command_scale
+            for drone, result in results.items()
+        }
+        constraint_ok, minimum_slack = ra.audit_published_accelerations(
+            published_accelerations
+        )
+        self.assertTrue(constraint_ok)
+        self.assertIsNotNone(minimum_slack)
+        self.assertGreaterEqual(minimum_slack, -1e-6)
+        self.assertFalse(results[0].vel_saturated)
+
+        published_accelerations[0] = np.array([2.1, 0.0])
+        constraint_ok, minimum_slack = ra.audit_published_accelerations(
+            published_accelerations
+        )
+        self.assertFalse(constraint_ok)
+        self.assertLess(minimum_slack, 0.0)
+
+    def test_published_audit_keeps_revoked_agent_outside_control_box(self) -> None:
+        command_scale = 0.7
+        ra = RuntimeAssurance(
+            params=RuntimeAssuranceParams(
+                d0=0.8,
+                beta=0.0,
+                degradation_dt=0.05,
+            ),
+            perception_sigma=0.0,
+            use_hocbf=True,
+            a_max=2.0,
+            command_feedforward_tau_s=command_scale,
+        )
+        snapshots = {
+            0: DroneSnapshot(0, (-4.0, 0.0, 2.5), velocity=(1.5, 0.0, 0.0)),
+            1: DroneSnapshot(1, (4.0, 0.0, 2.5), velocity=(0.0, 0.0, 0.0)),
+        }
+        results = ra.filter(
+            snapshots,
+            {0: np.zeros(2), 1: np.zeros(2)},
+            t=0.0,
+            fixed_actions={0: np.zeros(2)},
+        )
+        published_accelerations = {
+            drone: (
+                np.asarray(result.safe_action)
+                - np.asarray(snapshots[drone].velocity[:2])
+            )
+            / command_scale
+            for drone, result in results.items()
+        }
+        self.assertLess(published_accelerations[0][0], -2.0)
+        constraint_ok, minimum_slack = ra.audit_published_accelerations(
+            published_accelerations
+        )
+        self.assertTrue(constraint_ok)
+        self.assertGreaterEqual(minimum_slack, -1e-6)
+
     def test_pcbf_is_an_explicit_runtime_assurance_method(self) -> None:
         ra = RuntimeAssurance(
             sampled_data=True,

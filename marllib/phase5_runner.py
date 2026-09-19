@@ -2674,11 +2674,31 @@ def run_mqtt_loop(
                         ),
                     }
 
-            joint_constraint_ok = _joint_published_constraint_status(
-                command_audits=command_audits,
-                solver_feasible=solver_feasible,
-                solver_velocity_saturated=solver_velocity_saturated,
+            published_accelerations = {
+                drone: np.asarray(
+                    audit["published_effective_acceleration"],
+                    dtype=np.float64,
+                )
+                for drone, audit in command_audits.items()
+                if audit["published_effective_acceleration"] is not None
+            }
+            independently_checked = (
+                local_ras is None
+                and len(published_accelerations) == len(drone_ids)
             )
+            if independently_checked:
+                joint_constraint_ok, published_min_constraint_slack = (
+                    ra.audit_published_accelerations(published_accelerations)
+                )
+            else:
+                joint_constraint_ok = None
+                published_min_constraint_slack = None
+            if joint_constraint_ok is None:
+                joint_constraint_ok = _joint_published_constraint_status(
+                    command_audits=command_audits,
+                    solver_feasible=solver_feasible,
+                    solver_velocity_saturated=solver_velocity_saturated,
+                )
             joint_command_matches = all(
                 audit["published_command_matches_selected"]
                 for audit in command_audits.values()
@@ -2696,6 +2716,9 @@ def run_mqtt_loop(
             for row in step_rows.values():
                 row["all_published_commands_match_selected"] = joint_command_matches
                 row["published_command_constraint_ok"] = joint_constraint_ok
+                row["published_min_constraint_slack"] = (
+                    published_min_constraint_slack
+                )
 
             if execution_supervisor is not None:
                 execution_supervisor.record_commands(

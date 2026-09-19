@@ -49,6 +49,60 @@ def _pair_constraint(
     return c, b
 
 
+def minimum_hocbf_constraint_slack(
+    *,
+    accelerations: dict[int, np.ndarray],
+    positions: dict[int, np.ndarray],
+    velocities: dict[int, np.ndarray],
+    d_safe: dict[tuple[int, int], float],
+    k1: float,
+    k2: float,
+    a_max: float,
+    box_constrained_drones: set[int] | None = None,
+) -> float:
+    """Evaluate the actual joint acceleration against the HOCBF and box."""
+    drone_ids = sorted(positions)
+    if set(accelerations) != set(drone_ids):
+        raise ValueError("accelerations must cover every constrained drone")
+    index = {drone: idx for idx, drone in enumerate(drone_ids)}
+    packed = np.concatenate(
+        [np.asarray(accelerations[drone], dtype=np.float64) for drone in drone_ids]
+    )
+    if packed.shape != (2 * len(drone_ids),) or not np.all(np.isfinite(packed)):
+        raise ValueError("accelerations must be finite planar vectors")
+    constrained = (
+        set(drone_ids)
+        if box_constrained_drones is None
+        else set(box_constrained_drones)
+    )
+    if not constrained <= set(drone_ids):
+        raise ValueError("box constraints contain an unknown drone")
+    slacks = [
+        float(
+            a_max
+            - max(
+                np.max(np.abs(accelerations[drone]))
+                for drone in constrained
+            )
+        )
+    ] if constrained else []
+    for (i, j), safe_distance in d_safe.items():
+        c, b = _pair_constraint(
+            i=index[i],
+            j=index[j],
+            n_agents=len(drone_ids),
+            p_i=positions[i],
+            p_j=positions[j],
+            v_i=velocities[i],
+            v_j=velocities[j],
+            s=safe_distance,
+            k1=k1,
+            k2=k2,
+        )
+        slacks.append(float(np.dot(c, packed) - b))
+    return min(slacks, default=float("inf"))
+
+
 def _project_box(
     x: np.ndarray,
     a_max: float,

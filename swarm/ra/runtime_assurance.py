@@ -9,6 +9,7 @@ import numpy as np
 from swarm.ra.cbf import cbf_constraint, project_safe_action
 from swarm.ra.hocbf import (
     beta_of_tau,
+    minimum_hocbf_constraint_slack,
     minimum_acceleration_box_reserve,
     solve_acceleration_qp,
     solve_robust_sampled_data_qp,
@@ -25,7 +26,11 @@ from swarm.ra.margins import (
 )
 from swarm.ra.predictor import PredictiveMonitor
 from swarm.ra.pcbf import PCBFConfig, solve_pcbf
-from swarm.ra.sota_cbf import solve_prediction_based_cbf_qp, solve_zocbf_qp
+from swarm.ra.sota_cbf import (
+    minimum_prediction_based_constraint_slack,
+    solve_prediction_based_cbf_qp,
+    solve_zocbf_qp,
+)
 
 
 @dataclass
@@ -173,6 +178,7 @@ class RuntimeAssurance:
         if command_feedforward_tau_s is not None and command_feedforward_tau_s <= 0.0:
             raise ValueError("command_feedforward_tau_s must be positive")
         self.command_feedforward_tau_s = command_feedforward_tau_s
+        self._published_audit_context: dict[str, object] | None = None
         if constraint_boundary not in {"full", "static"}:
             raise ValueError("constraint_boundary must be full or static")
         self.constraint_boundary = constraint_boundary
@@ -279,6 +285,7 @@ class RuntimeAssurance:
         These agents remain in every pairwise constraint, but joint solvers
         cannot change their inputs or credit their control budget.
         """
+        self._published_audit_context = None
         fixed_actions = _normalize_fixed_actions(snapshots, fixed_actions)
         if self.sampled_data:
             return self._filter_sampled_data(
@@ -415,6 +422,47 @@ class RuntimeAssurance:
                 ),
             )
         return results
+
+    def audit_published_accelerations(
+        self,
+        accelerations: dict[int, np.ndarray],
+        *,
+        tolerance: float = 1e-6,
+    ) -> tuple[bool | None, float | None]:
+        """Check the published joint input against the selected constraints."""
+        context = self._published_audit_context
+        if context is None:
+            return None, None
+        try:
+            selected_filter = str(context["selected_filter"])
+            common = {
+                "accelerations": accelerations,
+                "positions": context["positions"],
+                "velocities": context["velocities"],
+                "a_max": float(context["a_max"]),
+                "box_constrained_drones": set(
+                    context["box_constrained_drones"]
+                ),
+            }
+            if selected_filter == "hocbf":
+                slack = minimum_hocbf_constraint_slack(
+                    **common,
+                    d_safe=context["safe_distance"],
+                    k1=float(context["k1"]),
+                    k2=float(context["k2"]),
+                )
+            elif selected_filter == "pb_recovery":
+                slack = minimum_prediction_based_constraint_slack(
+                    **common,
+                    static_distance=context["safe_distance"],
+                    alpha=float(context["alpha"]),
+                    braking_accel=float(context["braking_accel"]),
+                )
+            else:
+                return None, None
+        except (KeyError, TypeError, ValueError):
+            return None, None
+        return slack >= -tolerance, float(slack)
 
     def _filter_sampled_data(
         self,
@@ -733,8 +781,12 @@ class RuntimeAssurance:
             )
             a_nom_i = np.asarray(a_nom[i], dtype=np.float64)
             a_safe_i = np.asarray(a_safe[i], dtype=np.float64)
-            accel_saturated = bool(np.linalg.norm(a_safe_i) >= self.a_max - 1e-6)
-            vel_saturated = bool(np.linalg.norm(v_safe) >= self.v_max - 1e-6)
+            accel_saturated = bool(
+                np.any(np.abs(a_safe_i) >= self.a_max - 1e-6)
+            )
+            vel_saturated = bool(
+                np.any(np.abs(v_safe) >= self.v_max - 1e-6)
+            )
             local_boundaries = [
                 s_now[(ii, jj)] for (ii, jj) in s_now if i == ii or i == jj
             ]
@@ -1100,15 +1152,16 @@ class RuntimeAssurance:
 
         recovery_active = self.hocbf_pb_recovery and self._hocbf_recovery_active
         recovery_feasible: bool | None = None
+        recovery_safe_map = {
+            pair: boundary + self.hocbf_recovery_boundary_buffer_m
+            for pair, boundary in static_safe_map.items()
+        }
         if recovery_active:
             a_safe, recovery_feasible, _ = solve_prediction_based_cbf_qp(
                 a_nom=a_nom,
                 positions=positions,
                 velocities=velocities,
-                static_distance={
-                    pair: boundary + self.hocbf_recovery_boundary_buffer_m
-                    for pair, boundary in static_safe_map.items()
-                },
+                static_distance=recovery_safe_map,
                 alpha=self.hocbf_recovery_alpha,
                 braking_accel=self.hocbf_recovery_braking_accel,
                 a_max=self.a_max,
@@ -1125,6 +1178,28 @@ class RuntimeAssurance:
             a_safe = a_hocbf
             feasible = primary_feasible
             selected_filter = "hocbf"
+
+        selected_safe_map = (
+            recovery_safe_map if selected_filter == "pb_recovery" else d_safe_map
+        )
+        self._published_audit_context = {
+            "selected_filter": selected_filter,
+            "positions": {
+                drone: value.copy() for drone, value in positions.items()
+            },
+            "velocities": {
+                drone: value.copy() for drone, value in velocities.items()
+            },
+            "safe_distance": dict(selected_safe_map),
+            "a_max": self.a_max,
+            "box_constrained_drones": tuple(
+                drone for drone in drone_ids if drone not in fixed_accelerations
+            ),
+            "k1": self.k1,
+            "k2": self.k2,
+            "alpha": self.hocbf_recovery_alpha,
+            "braking_accel": self.hocbf_recovery_braking_accel,
+        }
 
         self.last_primary_hocbf_feasible = primary_feasible
         self.last_predictive_hocbf_feasible = predictive_feasible
@@ -1212,10 +1287,10 @@ class RuntimeAssurance:
                     float(min(local_boundaries)) if local_boundaries else None
                 ),
                 accel_saturated=bool(
-                    np.linalg.norm(a_safe[i]) >= self.a_max - 1e-6
+                    np.any(np.abs(a_safe[i]) >= self.a_max - 1e-6)
                 ),
                 vel_saturated=bool(
-                    np.linalg.norm(v_safe) >= self.v_max - 1e-6
+                    np.any(np.abs(v_safe) >= self.v_max - 1e-6)
                 ),
                 feasible=bool(feasible),
                 selected_filter=selected_filter,
