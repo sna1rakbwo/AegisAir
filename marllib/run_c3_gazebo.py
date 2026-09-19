@@ -204,6 +204,20 @@ def main() -> int:
                     "recovery_step": run["recovery_step"],
                     "recovery_time_s": run["recovery_time_s"],
                     "path_length_m": run["path_length_m"],
+                    "infrastructure_valid": run["infrastructure_valid"],
+                    "infrastructure_invalid_reasons": run[
+                        "infrastructure_invalid_reasons"
+                    ],
+                    "freshness_gate": run["freshness_gate"],
+                    "published_command_mismatch_count": run[
+                        "published_command_mismatch_count"
+                    ],
+                    "published_command_constraint_unknown_count": run[
+                        "published_command_constraint_unknown_count"
+                    ],
+                    "published_command_constraint_failure_count": run[
+                        "published_command_constraint_failure_count"
+                    ],
                     "counters": run.get("counters"),
                     "trajectory": trajectory.name,
                     "trajectory_sha256": _sha256(trajectory),

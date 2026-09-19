@@ -70,6 +70,7 @@ def _audit(path: Path, expected_groups: list[list[int]]) -> dict[str, Any]:
         "selected_qp_infeasible_steps": sum(
             any(drone.get("feasible") is False for drone in row["drones"].values())
             for row in rows
+            if row.get("input_freshness", {}).get("fresh", False)
         ),
         "ra_bypass_count": sum(
             int(drone.get("ra_bypass", True))
@@ -145,6 +146,7 @@ def main() -> int:
     latency = run["ra_solve_latency_summary_ms"]
     go = bool(
         mission_complete
+        and run["infrastructure_valid"]
         and not run["collision"]
         and run["min_rho"] is not None
         and run["min_rho"] > 0.0
@@ -178,6 +180,20 @@ def main() -> int:
             "mean_control_effort": effort,
             "ra_solve_latency_summary_ms": latency,
             "safety_bypass_count": run["safety_bypass_count"],
+            "infrastructure_valid": run["infrastructure_valid"],
+            "infrastructure_invalid_reasons": run[
+                "infrastructure_invalid_reasons"
+            ],
+            "freshness_gate": run["freshness_gate"],
+            "published_command_mismatch_count": run[
+                "published_command_mismatch_count"
+            ],
+            "published_command_constraint_unknown_count": run[
+                "published_command_constraint_unknown_count"
+            ],
+            "published_command_constraint_failure_count": run[
+                "published_command_constraint_failure_count"
+            ],
             "c3_group_slot_summary": state,
             "audit": audit,
             "trajectory": trajectory.name,

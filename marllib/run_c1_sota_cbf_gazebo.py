@@ -177,12 +177,17 @@ def _trajectory_metrics(path: Path) -> tuple[float, int]:
     infeasible_steps = 0
     for line in path.read_text(encoding="utf-8").splitlines():
         row = json.loads(line)
+        if not row.get("input_freshness", {}).get("fresh", False):
+            continue
         step_infeasible = False
         for drone in row["drones"].values():
+            published_velocity = drone.get("published_velocity")
+            if published_velocity is None:
+                continue
             effort.append(
                 float(
                     np.linalg.norm(
-                        np.asarray(drone["v_safe"][:2])
+                        np.asarray(published_velocity[:2])
                         - np.asarray(drone["v_nom"][:2])
                     )
                 )
@@ -190,7 +195,7 @@ def _trajectory_metrics(path: Path) -> tuple[float, int]:
             if drone["feasible"] is False:
                 step_infeasible = True
         infeasible_steps += int(step_infeasible)
-    return float(np.mean(effort)), infeasible_steps
+    return float(np.mean(effort)) if effort else float("nan"), infeasible_steps
 
 
 def _trial_geometry(manifest: dict, trial: dict) -> tuple[str, dict, dict]:
@@ -317,6 +322,20 @@ def main() -> int:
             "command_hold_jitter_count": run["command_hold_jitter_count"],
             "ra_solve_latency_summary_ms": run["ra_solve_latency_summary_ms"],
             "safety_bypass_count": run["safety_bypass_count"],
+            "infrastructure_valid": run["infrastructure_valid"],
+            "infrastructure_invalid_reasons": run[
+                "infrastructure_invalid_reasons"
+            ],
+            "freshness_gate": run["freshness_gate"],
+            "published_command_mismatch_count": run[
+                "published_command_mismatch_count"
+            ],
+            "published_command_constraint_unknown_count": run[
+                "published_command_constraint_unknown_count"
+            ],
+            "published_command_constraint_failure_count": run[
+                "published_command_constraint_failure_count"
+            ],
             "trajectory": trajectory.name,
             "trajectory_sha256": _sha256(trajectory),
         }

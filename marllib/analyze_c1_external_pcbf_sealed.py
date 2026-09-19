@@ -190,6 +190,9 @@ def main() -> int:
     summaries = _summaries(rows)
     paired = _paired(rows)
     binary = {
+        "all_infrastructure_valid": all(
+            row.get("infrastructure_valid", False) for row in rows
+        ),
         "all_methods_completed": all(row["mission_complete"] for row in rows),
         "all_methods_collision_free": all(not row["collision"] for row in rows),
         "mcnemar_discordant_pairs_per_comparison": 0,

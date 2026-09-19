@@ -104,6 +104,7 @@ def _trajectory_audit(
     ]
     after = [row for row in rows if int(row["step"]) >= change_step]
     failed_rows = [row["drones"][str(failed_drone)] for row in after]
+    failed_commands = [row.get("published_velocity") for row in failed_rows]
     admission_rows = [
         row.get("recoverability_admission") for row in after
         if row.get("recoverability_admission") is not None
@@ -126,20 +127,31 @@ def _trajectory_audit(
         and all(row.get("command_authority") == "failed_zero" for row in failed_rows),
         "failed_horizontal_command_zero_all_steps": bool(failed_rows)
         and all(
-            np.linalg.norm(np.asarray(row["v_safe"][:2], dtype=np.float64))
-            <= 1e-9
-            for row in failed_rows
+            command is not None
+            and np.linalg.norm(np.asarray(command[:2], dtype=np.float64)) <= 1e-9
+            for command in failed_commands
         ),
         "selected_qp_infeasible_steps": sum(
             any(drone.get("feasible") is False for drone in row["drones"].values())
             for row in rows
+            if row.get("input_freshness", {}).get("fresh", False)
         ),
         "hold_goal_frozen": not hold_goals
         or all(goal == hold_goals[0] for goal in hold_goals),
         "healthy_post_failure_max_command_mps": max(
             (
-                float(np.linalg.norm(np.asarray(row["drones"][str(healthy_drone)]["v_safe"][:2])))
+                float(
+                    np.linalg.norm(
+                        np.asarray(
+                            row["drones"][str(healthy_drone)][
+                                "published_velocity"
+                            ][:2]
+                        )
+                    )
+                )
                 for row in after
+                if row["drones"][str(healthy_drone)].get("published_velocity")
+                is not None
             ),
             default=0.0,
         ),
@@ -244,6 +256,18 @@ def main() -> int:
         "counters": run.get("counters"),
         "recoverability_admission": run.get("recoverability_admission"),
         "safety_bypass_count": run["safety_bypass_count"],
+        "infrastructure_valid": run["infrastructure_valid"],
+        "infrastructure_invalid_reasons": run["infrastructure_invalid_reasons"],
+        "freshness_gate": run["freshness_gate"],
+        "published_command_mismatch_count": run[
+            "published_command_mismatch_count"
+        ],
+        "published_command_constraint_unknown_count": run[
+            "published_command_constraint_unknown_count"
+        ],
+        "published_command_constraint_failure_count": run[
+            "published_command_constraint_failure_count"
+        ],
         "ra_solve_latency_summary_ms": run["ra_solve_latency_summary_ms"],
         "trajectory_audit": audit,
         "trajectory": trajectory.name,

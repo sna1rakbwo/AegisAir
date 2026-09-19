@@ -10,6 +10,8 @@ import numpy as np
 from swarm.ra.execution_supervisor import (
     ExecutionConformanceSupervisor,
     ExecutionSupervisorConfig,
+    TelemetryFreshnessConfig,
+    TelemetryFreshnessGate,
     deterministic_backup_velocity,
 )
 from swarm.safety import DroneSnapshot
@@ -165,6 +167,47 @@ class ExecutionConformanceSupervisorTest(unittest.TestCase):
         pair = decision.recoverability[0]
         self.assertGreater(pair.separation_m, config.safe_distance_m)
         self.assertLess(pair.margin_m, 0.0)
+
+
+class TelemetryFreshnessGateTest(unittest.TestCase):
+    def test_first_stale_sample_trips_immediately(self) -> None:
+        gate = TelemetryFreshnessGate(
+            TelemetryFreshnessConfig(max_age_s=0.15, release_samples=3)
+        )
+        decision = gate.assess(
+            required_drones=[2, 3],
+            telemetry_ages_s={2: 0.01, 3: 0.65},
+        )
+        self.assertTrue(decision.active)
+        self.assertFalse(decision.fresh)
+        self.assertTrue(decision.newly_tripped)
+        self.assertEqual(decision.stale_drones, (3,))
+        self.assertIn("TELEMETRY_STALE", decision.reasons)
+
+    def test_release_requires_consecutive_fresh_samples(self) -> None:
+        gate = TelemetryFreshnessGate(
+            TelemetryFreshnessConfig(max_age_s=0.15, release_samples=3)
+        )
+        gate.assess(required_drones=[2], telemetry_ages_s={2: 0.65})
+        for _ in range(2):
+            decision = gate.assess(
+                required_drones=[2], telemetry_ages_s={2: 0.01}
+            )
+            self.assertTrue(decision.active)
+            self.assertIn("FRESHNESS_HYSTERESIS", decision.reasons)
+        decision = gate.assess(
+            required_drones=[2], telemetry_ages_s={2: 0.01}
+        )
+        self.assertFalse(decision.active)
+        self.assertTrue(decision.newly_released)
+
+    def test_healthy_samples_do_not_gate_control(self) -> None:
+        gate = TelemetryFreshnessGate()
+        decision = gate.assess(
+            required_drones=[2, 3], telemetry_ages_s={2: 0.01, 3: 0.02}
+        )
+        self.assertTrue(decision.fresh)
+        self.assertFalse(decision.active)
 
 
 if __name__ == "__main__":

@@ -21,6 +21,118 @@ import numpy as np
 
 
 @dataclass(frozen=True)
+class TelemetryFreshnessConfig:
+    """Input-age contract for commands issued by the central controller."""
+
+    max_age_s: float = 0.15
+    release_samples: int = 3
+
+    def __post_init__(self) -> None:
+        if self.max_age_s <= 0.0:
+            raise ValueError("max telemetry age must be positive")
+        if self.release_samples < 1:
+            raise ValueError("release samples must be positive")
+
+
+@dataclass(frozen=True)
+class TelemetryFreshnessDecision:
+    """Whether normal control may use the current set of input samples."""
+
+    fresh: bool
+    active: bool
+    reasons: tuple[str, ...]
+    stale_drones: tuple[int, ...]
+    missing_drones: tuple[int, ...]
+    consecutive_fresh: int
+    newly_tripped: bool = False
+    newly_released: bool = False
+
+
+class TelemetryFreshnessGate:
+    """Immediately blocks stale inputs and releases with fresh-sample hysteresis."""
+
+    def __init__(self, config: TelemetryFreshnessConfig | None = None) -> None:
+        self.config = config or TelemetryFreshnessConfig()
+        self.active = False
+        self.consecutive_fresh = 0
+        self.trip_count = 0
+        self.release_count = 0
+        self.active_steps = 0
+        self.stale_steps = 0
+        self.max_observed_age_s = 0.0
+        self.reason_counts: dict[str, int] = {}
+
+    def assess(
+        self,
+        *,
+        required_drones: tuple[int, ...] | list[int],
+        telemetry_ages_s: Mapping[int, float],
+    ) -> TelemetryFreshnessDecision:
+        required = tuple(sorted(required_drones))
+        missing = tuple(drone for drone in required if drone not in telemetry_ages_s)
+        stale = tuple(
+            drone
+            for drone in required
+            if drone in telemetry_ages_s
+            and (
+                not math.isfinite(float(telemetry_ages_s[drone]))
+                or float(telemetry_ages_s[drone]) > self.config.max_age_s
+            )
+        )
+        finite_ages = [
+            float(telemetry_ages_s[drone])
+            for drone in required
+            if drone in telemetry_ages_s
+            and math.isfinite(float(telemetry_ages_s[drone]))
+        ]
+        if finite_ages:
+            self.max_observed_age_s = max(self.max_observed_age_s, max(finite_ages))
+
+        reasons: list[str] = []
+        if missing:
+            reasons.append("TELEMETRY_MISSING")
+        if stale:
+            reasons.append("TELEMETRY_STALE")
+        fresh = not reasons
+        newly_tripped = False
+        newly_released = False
+        if not fresh:
+            self.stale_steps += 1
+            self.consecutive_fresh = 0
+            for reason in reasons:
+                self.reason_counts[reason] = self.reason_counts.get(reason, 0) + 1
+            if not self.active:
+                self.active = True
+                self.trip_count += 1
+                newly_tripped = True
+        elif self.active:
+            self.consecutive_fresh += 1
+            if self.consecutive_fresh >= self.config.release_samples:
+                self.active = False
+                self.release_count += 1
+                newly_released = True
+                reasons.append("TELEMETRY_FRESH")
+            else:
+                reasons.append("FRESHNESS_HYSTERESIS")
+        else:
+            self.consecutive_fresh = 0
+            reasons.append("TELEMETRY_FRESH")
+
+        if self.active:
+            self.active_steps += 1
+        return TelemetryFreshnessDecision(
+            fresh=fresh,
+            active=self.active,
+            reasons=tuple(reasons),
+            stale_drones=stale,
+            missing_drones=missing,
+            consecutive_fresh=self.consecutive_fresh,
+            newly_tripped=newly_tripped,
+            newly_released=newly_released,
+        )
+
+
+@dataclass(frozen=True)
 class ExecutionSupervisorConfig:
     """Frozen C2-prime runtime contract.
 

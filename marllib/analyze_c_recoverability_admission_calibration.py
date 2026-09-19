@@ -13,7 +13,8 @@ def _common_integrity(row: dict[str, Any]) -> bool:
     audit = row["trajectory_audit"]
     latency = row["ra_solve_latency_summary_ms"]
     return bool(
-        row["safety_bypass_count"] == 0
+        row.get("infrastructure_valid", False)
+        and row["safety_bypass_count"] == 0
         and audit["ra_bypass_count"] == 0
         and audit["failed_authority_revoked_all_steps"]
         and audit["failed_horizontal_command_zero_all_steps"]
