@@ -32,14 +32,15 @@ PIDS=()
 started=0
 for id in "${ids[@]}"; do
   rootfs="$STATE_DIR/rootfs_$id"
-  cp -a "$PX4_DIR/build/px4_sitl_default/rootfs" "$rootfs"
+  mkdir -p "$rootfs"
   pose="0,0,0.5"
   IFS=';' read -r -a entries <<< "$POSES"
   for entry in "${entries[@]}"; do [[ "$entry" == "$id="* ]] && pose="${entry#*=}"; done
   (
     cd "$rootfs"
     export PX4_GZ_STANDALONE=1 PX4_SIM_MODEL=gz_x500 PX4_UXRCE_DDS_PORT=8889 PX4_GZ_MODEL_POSE="$pose"
-    exec "$BIN" -d -i "$id"
+    exec "$BIN" -d -i "$id" -w "$rootfs" \
+      "$PX4_DIR/build/px4_sitl_default/etc"
   ) >"$STATE_DIR/px4_$id.log" 2>&1 &
   PIDS+=("$!")
   started=$((started + 1))

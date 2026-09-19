@@ -55,9 +55,12 @@ PX4_DIR="$PX4_DIR" GAZEBO_SEED="$seed" POSES="$poses" \
 launcher=$!
 
 cleanup() {
-  [[ -n "${state_dir:-}" ]] \
-    && "$ROOT/scripts/stop_paper_sitl.sh" "$state_dir" \
-    || true
+  if [[ -n "${state_dir:-}" ]]; then
+    "$ROOT/scripts/stop_paper_sitl.sh" "$state_dir" || true
+    if [[ "${PRESERVE_SITL_STATE:-0}" != 1 && -d "$state_dir" ]]; then
+      find "$state_dir" -depth -delete
+    fi
+  fi
   kill "$launcher" "$heartbeat_2" "$heartbeat_3" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
