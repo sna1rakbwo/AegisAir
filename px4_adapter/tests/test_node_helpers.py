@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import Mock
 
 from px4_adapter.mqtt_codec import TelemetryState
-from px4_adapter.node import _local_hold_position, _measurement_timestamp_ms
+from px4_adapter.node import MqttBridge, _local_hold_position, _measurement_timestamp_ms
 
 
 class LocalHoldPositionTest(unittest.TestCase):
@@ -73,6 +74,36 @@ class MeasurementTimestampTest(unittest.TestCase):
                 stale_after_s=1.5,
             )
         )
+
+
+class MqttBridgePublishTest(unittest.TestCase):
+    def test_publish_enqueues_without_blocking_the_ros_executor(self) -> None:
+        result = Mock(rc=0)
+        client = Mock()
+        client.publish.return_value = result
+        bridge = object.__new__(MqttBridge)
+        bridge.config = {"mqtt": {"qos": 0}}
+        bridge._client = client
+
+        bridge.publish("px4/2/state", "payload")
+
+        client.publish.assert_called_once_with(
+            "px4/2/state",
+            payload="payload",
+            qos=0,
+            retain=False,
+        )
+        result.wait_for_publish.assert_not_called()
+
+    def test_publish_rejects_an_enqueue_error(self) -> None:
+        client = Mock()
+        client.publish.return_value = Mock(rc=4)
+        bridge = object.__new__(MqttBridge)
+        bridge.config = {"mqtt": {"qos": 0}}
+        bridge._client = client
+
+        with self.assertRaisesRegex(RuntimeError, "rc=4"):
+            bridge.publish("px4/2/state", "payload")
 
 
 if __name__ == "__main__":

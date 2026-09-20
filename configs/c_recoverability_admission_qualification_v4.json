@@ -1,0 +1,108 @@
+{
+  "protocol_id": "aegisair-c-recoverability-admission-qualification-v4",
+  "phase": "qualification_dynamic_rollout_not_sealed_evidence",
+  "implementation_version": "dynamic_admission_v4_nonblocking_bridge",
+  "adapter_mqtt_publish_mode": "nonblocking_enqueue_rc_checked",
+  "parent_calibration_manifest": "c_recoverability_admission_calibration_v4.json",
+  "parent_calibration_manifest_sha256": "7f7bd34a0a3b0270c35eebcdd78a04963c75bf35c81c4b2b4995124e37116839",
+  "parent_calibration_requirement": "GO before any qualification-v4 run",
+  "rate_hz": 20.0,
+  "max_steps": 800,
+  "goal_epsilon": 0.55,
+  "drone_ids": [2, 3],
+  "failed_drone": 2,
+  "mission_change": {"kind": "fail_drone", "drone": 2},
+  "change_step": 30,
+  "velocity_command_mode": "feedforward_tau",
+  "tau_command_s": 0.7,
+  "conditions": ["IMMEDIATE_COMMIT_RA", "RECOVERABILITY_ADMISSION_RA", "RA_ONLY_HOLD"],
+  "recoverability_admission": {
+    "model": "time_aligned_dynamic_rollout_v2",
+    "clearance_m": 2.4,
+    "tracking_error_buffer_m": 0.20,
+    "braking_accel_mps2": 2.0,
+    "braking_accel_uncertainty_mps2": 0.25,
+    "ring_extra_m": [0.4, 0.8, 1.2],
+    "ring_samples": 32,
+    "arena": [-6.0, 6.0, -6.0, 6.0],
+    "waypoint_epsilon_m": 0.55,
+    "max_route_length_m": 18.0,
+    "dt_s": 0.05,
+    "rollout_horizon_s": 16.0,
+    "reaction_delay_s": 0.05,
+    "goal_gain_s_inv": 1.5,
+    "velocity_gain_s_inv": 2.0,
+    "healthy_velocity_limit_mps": 1.5,
+    "healthy_acceleration_limit_mps2": 2.0,
+    "execution_tau_s": 0.7,
+    "command_feedforward_tau_s": 0.7,
+    "terminal_speed_mps": 0.15
+  },
+  "ra_config": {
+    "tau_ctrl_s": 0.2,
+    "execution_tau_s": 0.7,
+    "k1": 4.0,
+    "k2": 4.0,
+    "boundary_guard": 1.0,
+    "boundary_buffer_m": 0.3,
+    "prediction_execution_fraction": 0.0,
+    "prediction_steps": 3,
+    "recovery_reserve_threshold": 1.0,
+    "recovery_alpha": 0.5,
+    "recovery_braking_accel_mps2": 2.0,
+    "recovery_boundary_buffer_m": 0.3,
+    "recovery_clear_steps": 5
+  },
+  "geometries": {
+    "diagonal_upper_admit": {
+      "description": "新 qualification 几何：健康机从上侧对角航线接管下侧 orphan goal。",
+      "world": "S1",
+      "reset_starts": {"2": [-1.8, -1.0, 2.5], "3": [-4.0, 2.5, 2.5]},
+      "base_goals": {"2": [4.0, -1.0, 2.5], "3": [4.0, 2.5, 2.5]},
+      "critical_goal": [4.0, -1.0],
+      "expected_admission": "admit"
+    },
+    "diagonal_lower_admit": {
+      "description": "新 qualification 几何：健康机从下侧对角航线接管上侧 orphan goal。",
+      "world": "S1",
+      "reset_starts": {"2": [-1.5, 1.2, 2.5], "3": [-4.0, -2.8, 2.5]},
+      "base_goals": {"2": [4.0, 1.2, 2.5], "3": [4.0, -2.8, 2.5]},
+      "critical_goal": [4.0, 1.2],
+      "expected_admission": "admit"
+    },
+    "offset_cross_admit": {
+      "description": "新 qualification 几何：不同横纵偏置和较短 orphan-goal x 位置。",
+      "world": "S1",
+      "reset_starts": {"2": [-2.0, -2.0, 2.5], "3": [-4.0, 1.0, 2.5]},
+      "base_goals": {"2": [3.5, -2.0, 2.5], "3": [4.0, 1.0, 2.5]},
+      "critical_goal": [3.5, -2.0],
+      "expected_admission": "admit"
+    },
+    "occupied_upper_reject": {
+      "description": "新 qualification 拒绝几何：失效机占据上侧 orphan goal。",
+      "world": "S1",
+      "reset_starts": {"2": [1.5, 1.0, 2.5], "3": [-4.0, -2.0, 2.5]},
+      "base_goals": {"2": [1.5, 1.0, 2.5], "3": [4.0, -2.0, 2.5]},
+      "critical_goal": [1.5, 1.0],
+      "expected_admission": "reject"
+    },
+    "occupied_lower_reject": {
+      "description": "新 qualification 拒绝几何：失效机占据下侧 orphan goal。",
+      "world": "S1",
+      "reset_starts": {"2": [0.5, -2.0, 2.5], "3": [-4.0, 2.0, 2.5]},
+      "base_goals": {"2": [0.5, -2.0, 2.5], "3": [4.0, 2.0, 2.5]},
+      "critical_goal": [0.5, -2.0],
+      "expected_admission": "reject"
+    }
+  },
+  "trials": [
+    {"trial_id": "radm4q01", "geometry_id": "diagonal_upper_admit", "seed": 13401, "condition_order": ["RECOVERABILITY_ADMISSION_RA", "IMMEDIATE_COMMIT_RA", "RA_ONLY_HOLD"]},
+    {"trial_id": "radm4q02", "geometry_id": "diagonal_lower_admit", "seed": 13402, "condition_order": ["RA_ONLY_HOLD", "RECOVERABILITY_ADMISSION_RA", "IMMEDIATE_COMMIT_RA"]},
+    {"trial_id": "radm4q03", "geometry_id": "offset_cross_admit", "seed": 13403, "condition_order": ["IMMEDIATE_COMMIT_RA", "RA_ONLY_HOLD", "RECOVERABILITY_ADMISSION_RA"]},
+    {"trial_id": "radm4q04", "geometry_id": "occupied_upper_reject", "seed": 13404, "condition_order": ["RECOVERABILITY_ADMISSION_RA", "RA_ONLY_HOLD", "IMMEDIATE_COMMIT_RA"]},
+    {"trial_id": "radm4q05", "geometry_id": "occupied_lower_reject", "seed": 13405, "condition_order": ["RA_ONLY_HOLD", "IMMEDIATE_COMMIT_RA", "RECOVERABILITY_ADMISSION_RA"]}
+  ],
+  "qualification_go_criteria": "所有五条 admission 条件必须与 expected_admission 一致并通过 calibration 同一安全、权限、实时性门；同时至少一个 admit 和一个 reject。所有 RA-only hold 必须安全且零 post-failure critical coverage；Immediate comparator 原样报告。",
+  "stopping_rule": "任一有效 admission/hold 条件失败即 qualification No-Go，不修改参数、几何、候选集合、seed 或时域，不进入 sealed。基础设施无效启动只允许同一 manifest/seed 隔离重启。Immediate comparator 只报告观测结果，不参与 qualification Go/No-Go。",
+  "claim_boundary": "本 qualification 使用未参与 development 的新几何和 seed；通过后才允许生成另一个全新 sealed manifest。"
+}

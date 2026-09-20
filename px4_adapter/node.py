@@ -181,7 +181,11 @@ class MqttBridge:
             qos=int(self.config["mqtt"].get("qos", 0)),
             retain=False,
         )
-        result.wait_for_publish(timeout=5)
+        if int(getattr(result, "rc", 0)) != 0:
+            raise RuntimeError(
+                f"adapter failed to enqueue MQTT publication for {topic!r}: "
+                f"rc={result.rc}"
+            )
 
     def stop(self) -> None:
         self._client.loop_stop()

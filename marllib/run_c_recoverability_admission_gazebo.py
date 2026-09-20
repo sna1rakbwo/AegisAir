@@ -26,10 +26,10 @@ from swarm.recovery import (
 
 
 PROTOCOL_IDS = {
-    "aegisair-c-recoverability-admission-calibration-v3",
-    "aegisair-c-recoverability-admission-qualification-v3",
+    "aegisair-c-recoverability-admission-calibration-v4",
+    "aegisair-c-recoverability-admission-qualification-v4",
 }
-IMPLEMENTATION_VERSION = "dynamic_admission_v3"
+IMPLEMENTATION_VERSION = "dynamic_admission_v4_nonblocking_bridge"
 CONDITIONS = {
     "IMMEDIATE_COMMIT_RA",
     "RECOVERABILITY_ADMISSION_RA",

@@ -28,7 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class RecoverabilityAdmissionProtocolTest(unittest.TestCase):
     def setUp(self) -> None:
         self.manifest = json.loads(
-            (ROOT / "configs/c_recoverability_admission_calibration_v3.json").read_text(
+            (ROOT / "configs/c_recoverability_admission_calibration_v4.json").read_text(
                 encoding="utf-8"
             )
         )
@@ -37,6 +37,14 @@ class RecoverabilityAdmissionProtocolTest(unittest.TestCase):
         self.assertIn(self.manifest["protocol_id"], PROTOCOL_IDS)
         self.assertEqual(
             self.manifest["implementation_version"], IMPLEMENTATION_VERSION
+        )
+        self.assertEqual(
+            self.manifest["adapter_mqtt_publish_mode"],
+            "nonblocking_enqueue_rc_checked",
+        )
+        self.assertNotIn(
+            "aegisair-c-recoverability-admission-calibration-v3",
+            PROTOCOL_IDS,
         )
         self.assertNotIn(
             "aegisair-c-recoverability-admission-sealed-v1",
@@ -50,6 +58,39 @@ class RecoverabilityAdmissionProtocolTest(unittest.TestCase):
         self.assertEqual(expected, {"admit", "reject"})
         for trial in self.manifest["trials"]:
             self.assertEqual(set(trial["condition_order"]), CONDITIONS)
+
+    def test_v4_only_changes_runtime_transport_and_protocol_identity(self) -> None:
+        historical = json.loads(
+            (ROOT / "configs/c_recoverability_admission_calibration_v3.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        for key in (
+            "rate_hz",
+            "max_steps",
+            "goal_epsilon",
+            "drone_ids",
+            "failed_drone",
+            "mission_change",
+            "change_step",
+            "velocity_command_mode",
+            "tau_command_s",
+            "conditions",
+            "recoverability_admission",
+            "ra_config",
+            "geometries",
+        ):
+            self.assertEqual(self.manifest[key], historical[key], key)
+        self.assertEqual(
+            [
+                (trial["geometry_id"], trial["seed"], trial["condition_order"])
+                for trial in self.manifest["trials"]
+            ],
+            [
+                (trial["geometry_id"], trial["seed"], trial["condition_order"])
+                for trial in historical["trials"]
+            ],
+        )
 
     def test_admission_parameters_are_frozen(self) -> None:
         config = _admission_config(
@@ -270,10 +311,10 @@ class RecoverabilityAdmissionProtocolTest(unittest.TestCase):
         )
 
     def test_qualification_references_exact_calibration_manifest(self) -> None:
-        calibration_path = ROOT / "configs/c_recoverability_admission_calibration_v3.json"
+        calibration_path = ROOT / "configs/c_recoverability_admission_calibration_v4.json"
         qualification = json.loads(
             (
-                ROOT / "configs/c_recoverability_admission_qualification_v3.json"
+                ROOT / "configs/c_recoverability_admission_qualification_v4.json"
             ).read_text(encoding="utf-8")
         )
         self.assertEqual(
