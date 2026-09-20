@@ -21,7 +21,7 @@ import sys
 import time
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -31,7 +31,8 @@ if str(ROOT) not in sys.path:
 
 from marllib.config import ScenarioConfig
 from marllib.envs.multi_uav import MultiUAVEnv
-from marllib.policies.mappo import MappoPilot
+if TYPE_CHECKING:
+    from marllib.policies.mappo import MappoPilot
 from px4_adapter.mqtt_codec import (
     TelemetryState,
     decode_command,
@@ -3078,6 +3079,13 @@ def main() -> int:
     if args.pilot == "checkpoint":
         if not args.checkpoint:
             parser.error("--checkpoint is required with --pilot checkpoint")
+        try:
+            from marllib.policies.mappo import MappoPilot
+        except ModuleNotFoundError:
+            parser.error(
+                "--pilot checkpoint requires the non-public MARL checkpoint "
+                "runtime, which is intentionally excluded from this reproduction release"
+            )
         pilot = MappoPilot(
             args.checkpoint,
             obs_dim=4 + 5 * spec["scenario"].max_neighbors,
