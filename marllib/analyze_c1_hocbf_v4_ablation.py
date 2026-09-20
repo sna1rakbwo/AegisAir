@@ -90,7 +90,10 @@ def main() -> int:
         "method_summary": _method_summary(rows) if rows else [],
         "paired": _paired(rows, manifest["comparisons"]) if rows else [],
         "go": bool(len(rows) == expected and all(
-            row["method"] in methods and not row["collision"] and row["mission_complete"]
+            row["method"] in methods
+            and row.get("infrastructure_valid", False)
+            and not row["collision"]
+            and row["mission_complete"]
             and float(row["min_rho"]) > 0.0 for row in rows
         )),
     }

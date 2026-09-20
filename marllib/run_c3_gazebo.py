@@ -22,6 +22,7 @@ if str(ROOT) not in sys.path:
 
 from marllib.phase5_runner import run_mqtt_loop
 from swarm.recovery import (
+    MlxLmClient,
     RuleMissionPlanner,
 )
 
@@ -32,7 +33,7 @@ PROTOCOL_IDS = {
     "aegisair-c3-closed-loop-v3-hocbf-v4-smoke-v1",
     "aegisair-c3-closed-loop-v3-hocbf-v4-validation-v1",
 }
-CONDITIONS = ("R0", "R1")
+CONDITIONS = ("R0", "R1", "R2")
 
 
 def _sha256(path: Path) -> str:
@@ -47,12 +48,23 @@ def _load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _recovery_clients(condition: str) -> tuple[str, Any, Any]:
+def _recovery_clients(
+    condition: str,
+    qwen_model: str,
+    qwen_max_tokens: int,
+) -> tuple[str, Any, Any]:
     """Return ``(mode, llm_client, llm_fallback)`` for a frozen condition."""
     if condition == "R0":
         return "CBF_ONLY", None, None
     if condition == "R1":
         return "ASYNC", RuleMissionPlanner(), None
+    if condition == "R2":
+        client = MlxLmClient(
+            model_id=qwen_model,
+            max_tokens=qwen_max_tokens,
+            load=True,
+        )
+        return "ASYNC", client, RuleMissionPlanner()
     raise ValueError(f"unknown C3 condition: {condition}")
 
 
@@ -62,6 +74,11 @@ def main() -> int:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=1883)
     parser.add_argument("--out-dir", type=Path, required=True)
+    parser.add_argument(
+        "--qwen-model",
+        default="/Users/lijiajun/.cache/aegisair-qwen3-4b-4bit-bench",
+    )
+    parser.add_argument("--qwen-max-tokens", type=int, default=48)
     parser.add_argument(
         "--velocity-command-mode",
         choices=["safe_action", "feedforward_tau", "nominal"],
@@ -164,7 +181,11 @@ def main() -> int:
         for order_index, condition in enumerate(trial["condition_order"]):
             if condition not in CONDITIONS:
                 parser.error(f"unknown condition {condition} in trial {trial_id}")
-            mode, llm_client, llm_fallback = _recovery_clients(condition)
+            mode, llm_client, llm_fallback = _recovery_clients(
+                condition,
+                args.qwen_model,
+                args.qwen_max_tokens,
+            )
             trajectory = args.out_dir / f"{trial_id}_{order_index:02d}_{condition}.jsonl"
             run = run_mqtt_loop(
                 drone_ids=drone_ids,
@@ -204,6 +225,20 @@ def main() -> int:
                     "recovery_step": run["recovery_step"],
                     "recovery_time_s": run["recovery_time_s"],
                     "path_length_m": run["path_length_m"],
+                    "infrastructure_valid": run["infrastructure_valid"],
+                    "infrastructure_invalid_reasons": run[
+                        "infrastructure_invalid_reasons"
+                    ],
+                    "freshness_gate": run["freshness_gate"],
+                    "published_command_mismatch_count": run[
+                        "published_command_mismatch_count"
+                    ],
+                    "published_command_constraint_unknown_count": run[
+                        "published_command_constraint_unknown_count"
+                    ],
+                    "published_command_constraint_failure_count": run[
+                        "published_command_constraint_failure_count"
+                    ],
                     "counters": run.get("counters"),
                     "trajectory": trajectory.name,
                     "trajectory_sha256": _sha256(trajectory),

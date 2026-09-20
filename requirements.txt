@@ -2,5 +2,7 @@ paho-mqtt>=2.0,<3.0
 PyYAML>=6.0
 amqtt>=0.11,<0.12
 numpy>=1.26,<3
+casadi>=3.7,<4
 opencv-python>=4.10
+torch>=2.6
 pydantic>=2.0,<3

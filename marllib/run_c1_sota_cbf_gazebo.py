@@ -104,14 +104,13 @@ def _method_kwargs(method: str, config: dict, tau_command: float) -> dict:
             "pcbf_horizon": int(config["horizon"]),
             "pcbf_terminal_buffer_m": float(config["terminal_buffer_m"]),
             "pcbf_terminal_velocity_tolerance_mps": float(config.get("terminal_velocity_tolerance_mps", 0.0)),
-            "pcbf_slack_weight": float(config["slack_weight"]),
-            "pcbf_tracking_weight": float(config["tracking_weight"]),
-            "pcbf_lateral_candidates": tuple(
-                float(value)
-                for value in config.get(
-                    "lateral_candidates_mps2", [0.0, 0.5, 1.0, 1.5, 2.0]
-                )
-            ),
+            "pcbf_position_bound_m": float(config.get("position_bound_m", 20.0)),
+            "pcbf_velocity_bound_mps": float(config.get("velocity_bound_mps", 5.0)),
+            "pcbf_max_iterations": int(config.get("max_iterations", 300)),
+            "pcbf_multistart_count": int(config.get("multistart_count", 3)),
+            "pcbf_tolerance": float(config.get("tolerance", 1e-7)),
+            "pcbf_acceptable_tolerance": float(config.get("acceptable_tolerance", 1e-5)),
+            "pcbf_lexicographic_tolerance": float(config.get("lexicographic_tolerance", 1e-7)),
         }
     if method == "AEGIS_HOCBF_V2":
         return {
@@ -177,12 +176,17 @@ def _trajectory_metrics(path: Path) -> tuple[float, int]:
     infeasible_steps = 0
     for line in path.read_text(encoding="utf-8").splitlines():
         row = json.loads(line)
+        if not row.get("input_freshness", {}).get("fresh", False):
+            continue
         step_infeasible = False
         for drone in row["drones"].values():
+            published_velocity = drone.get("published_velocity")
+            if published_velocity is None:
+                continue
             effort.append(
                 float(
                     np.linalg.norm(
-                        np.asarray(drone["v_safe"][:2])
+                        np.asarray(published_velocity[:2])
                         - np.asarray(drone["v_nom"][:2])
                     )
                 )
@@ -190,7 +194,7 @@ def _trajectory_metrics(path: Path) -> tuple[float, int]:
             if drone["feasible"] is False:
                 step_infeasible = True
         infeasible_steps += int(step_infeasible)
-    return float(np.mean(effort)), infeasible_steps
+    return float(np.mean(effort)) if effort else float("nan"), infeasible_steps
 
 
 def _trial_geometry(manifest: dict, trial: dict) -> tuple[str, dict, dict]:
@@ -317,6 +321,20 @@ def main() -> int:
             "command_hold_jitter_count": run["command_hold_jitter_count"],
             "ra_solve_latency_summary_ms": run["ra_solve_latency_summary_ms"],
             "safety_bypass_count": run["safety_bypass_count"],
+            "infrastructure_valid": run["infrastructure_valid"],
+            "infrastructure_invalid_reasons": run[
+                "infrastructure_invalid_reasons"
+            ],
+            "freshness_gate": run["freshness_gate"],
+            "published_command_mismatch_count": run[
+                "published_command_mismatch_count"
+            ],
+            "published_command_constraint_unknown_count": run[
+                "published_command_constraint_unknown_count"
+            ],
+            "published_command_constraint_failure_count": run[
+                "published_command_constraint_failure_count"
+            ],
             "trajectory": trajectory.name,
             "trajectory_sha256": _sha256(trajectory),
         }

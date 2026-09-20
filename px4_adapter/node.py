@@ -39,6 +39,39 @@ from px4_adapter.px4_codec import (
 from px4_adapter.safety_state import LocalSafetyState, SafetyLimits
 
 
+def _local_hold_position(
+    state: TelemetryState | None,
+    last_plan_position: tuple[float, float, float] | None,
+) -> tuple[float, float, float] | None:
+    """Prefer the adapter's current local measurement for watchdog hold."""
+    if (
+        state is not None
+        and state.xy_valid
+        and state.z_valid
+        and all(math.isfinite(value) for value in state.position)
+    ):
+        return tuple(float(value) for value in state.position)
+    return last_plan_position
+
+
+def _measurement_timestamp_ms(
+    *,
+    now_ms: int,
+    position_arrival_ms: int,
+    status_arrival_ms: int,
+    stale_after_s: float,
+) -> int | None:
+    """Return the position measurement time only while both PX4 inputs are fresh."""
+    stale_after_ms = stale_after_s * 1000.0
+    if position_arrival_ms <= 0 or status_arrival_ms <= 0:
+        return None
+    if now_ms - position_arrival_ms > stale_after_ms:
+        return None
+    if now_ms - status_arrival_ms > stale_after_ms:
+        return None
+    return position_arrival_ms
+
+
 def _load_config(path: str) -> dict[str, Any]:
     config = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     if not isinstance(config, dict):
@@ -148,7 +181,11 @@ class MqttBridge:
             qos=int(self.config["mqtt"].get("qos", 0)),
             retain=False,
         )
-        result.wait_for_publish(timeout=5)
+        if int(getattr(result, "rc", 0)) != 0:
+            raise RuntimeError(
+                f"adapter failed to enqueue MQTT publication for {topic!r}: "
+                f"rc={result.rc}"
+            )
 
     def stop(self) -> None:
         self._client.loop_stop()
@@ -212,7 +249,8 @@ def main() -> None:
             self.last_position: Any = None
             self.last_status: Any = None
             self.last_attitude: Any = None
-            self.last_message_arrival_ms: int = 0
+            self.last_position_arrival_ms: int = 0
+            self.last_status_arrival_ms: int = 0
             self.last_state: TelemetryState | None = None
             self.active_command: Px4Command | None = None
             self.last_plan_position: tuple[float, float, float] | None = None
@@ -280,13 +318,13 @@ def main() -> None:
             if self.last_position is None:
                 self.get_logger().info("received first vehicle_local_position")
             self.last_position = msg
-            self.last_message_arrival_ms = time.time_ns() // 1_000_000
+            self.last_position_arrival_ms = time.time_ns() // 1_000_000
 
         def on_status(self, msg: Any) -> None:
             if self.last_status is None:
                 self.get_logger().info("received first vehicle_status")
             self.last_status = msg
-            self.last_message_arrival_ms = time.time_ns() // 1_000_000
+            self.last_status_arrival_ms = time.time_ns() // 1_000_000
 
         def on_attitude(self, msg: Any) -> None:
             self.last_attitude = msg
@@ -313,7 +351,13 @@ def main() -> None:
             if self.last_status is None or self.last_position is None:
                 return None
             now_ms = time.time_ns() // 1_000_000
-            if now_ms - self.last_message_arrival_ms > self.telemetry_stale_sec * 1000.0:
+            measurement_timestamp_ms = _measurement_timestamp_ms(
+                now_ms=now_ms,
+                position_arrival_ms=self.last_position_arrival_ms,
+                status_arrival_ms=self.last_status_arrival_ms,
+                stale_after_s=self.telemetry_stale_sec,
+            )
+            if measurement_timestamp_ms is None:
                 return None
             position = self.last_position
             status = self.last_status
@@ -323,7 +367,7 @@ def main() -> None:
             return TelemetryState(
                 instance_id=self.instance_id,
                 source_frame=self.source_frame,
-                timestamp_ms=now_ms,
+                timestamp_ms=measurement_timestamp_ms,
                 source_timestamp_us=int(position.timestamp),
                 armed=int(status.arming_state) == VehicleStatus.ARMING_STATE_ARMED,
                 nav_state=int(status.nav_state),
@@ -348,8 +392,13 @@ def main() -> None:
                 now_ms = time.time_ns() // 1_000_000
                 if (
                     self.last_status is not None
-                    and now_ms - self.last_message_arrival_ms
-                    > self.telemetry_stale_sec * 1000.0
+                    and _measurement_timestamp_ms(
+                        now_ms=now_ms,
+                        position_arrival_ms=self.last_position_arrival_ms,
+                        status_arrival_ms=self.last_status_arrival_ms,
+                        stale_after_s=self.telemetry_stale_sec,
+                    )
+                    is None
                 ):
                     source_timestamp_us = (
                         int(self.last_position.timestamp)
@@ -409,10 +458,21 @@ def main() -> None:
                 )
 
             if not decision.allowed or self.active_command is None:
-                if state is not None and self.last_plan_position is not None:
+                hold_position = _local_hold_position(state, self.last_plan_position)
+                if decision.state in {"LAND", "RTL"}:
+                    fallback_plan = build_control_plan(
+                        decision.state.lower(),
+                        current_position=hold_position,
+                        target_system=int(self.config["control"].get("target_system", self.instance_id + 1)),
+                        target_component=int(self.config["control"].get("target_component", 1)),
+                        source_system=int(self.config["control"].get("source_system", 1)),
+                        source_component=int(self.config["control"].get("source_component", 1)),
+                    )
+                    self._publish_plan(fallback_plan)
+                elif hold_position is not None:
                     hold_plan = build_control_plan(
                         "hold",
-                        current_position=self.last_plan_position,
+                        current_position=hold_position,
                         target_system=int(self.config["control"].get("target_system", self.instance_id + 1)),
                         target_component=int(self.config["control"].get("target_component", 1)),
                         source_system=int(self.config["control"].get("source_system", 1)),

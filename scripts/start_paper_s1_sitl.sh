@@ -8,6 +8,7 @@ INSTANCES="${INSTANCES:-2,3}"
 POSES="${POSES:-2=0,-3,0.5;3=0,3,0.5}"
 SEED="${GAZEBO_SEED:-10001}"
 RUNTIME_ROOT="${RUNTIME_ROOT:-$ROOT/.runtime}"
+PX4_START_STAGGER_S="${PX4_START_STAGGER_S:-3}"
 WORLD="$ROOT/worlds/s1_single_obstacle.sdf"
 BIN="$PX4_DIR/build/px4_sitl_default/bin/px4"
 
@@ -28,18 +29,28 @@ kill -0 "$GZ_PID" 2>/dev/null || { cat "$STATE_DIR/gazebo.log" >&2; exit 1; }
 
 IFS=',' read -r -a ids <<< "$INSTANCES"
 PIDS=()
+started=0
 for id in "${ids[@]}"; do
   rootfs="$STATE_DIR/rootfs_$id"
-  cp -a "$PX4_DIR/build/px4_sitl_default/rootfs" "$rootfs"
+  mkdir -p "$rootfs"
   pose="0,0,0.5"
   IFS=';' read -r -a entries <<< "$POSES"
   for entry in "${entries[@]}"; do [[ "$entry" == "$id="* ]] && pose="${entry#*=}"; done
   (
     cd "$rootfs"
     export PX4_GZ_STANDALONE=1 PX4_SIM_MODEL=gz_x500 PX4_UXRCE_DDS_PORT=8889 PX4_GZ_MODEL_POSE="$pose"
-    exec "$BIN" -d -i "$id"
+    exec "$BIN" -d -i "$id" -w "$rootfs" \
+      "$PX4_DIR/build/px4_sitl_default/etc"
   ) >"$STATE_DIR/px4_$id.log" 2>&1 &
   PIDS+=("$!")
+  started=$((started + 1))
+  if (( started < ${#ids[@]} )); then
+    sleep "$PX4_START_STAGGER_S"
+    kill -0 "${PIDS[-1]}" 2>/dev/null || {
+      cat "$STATE_DIR/px4_$id.log" >&2
+      exit 1
+    }
+  fi
 done
 
 printf 'state_dir=%q\ngazebo_pid=%q\npx4_pids=%q\n' "$STATE_DIR" "$GZ_PID" "${PIDS[*]}" >"$STATE_DIR/STATE"

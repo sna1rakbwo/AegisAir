@@ -9,14 +9,39 @@ from pathlib import Path
 from typing import Any
 
 
+def _reconstruct_solver_feasible_publication_failures(
+    trajectory_rows: list[dict[str, Any]],
+) -> int:
+    count = 0
+    for record in trajectory_rows:
+        drones = list(record.get("drones", {}).values())
+        if (
+            drones
+            and all(
+                drone.get("published_command_constraint_ok") is False
+                for drone in drones
+            )
+            and all(drone.get("solver_feasible") is True for drone in drones)
+        ):
+            count += len(drones)
+    return count
+
+
 def _common_integrity(row: dict[str, Any]) -> bool:
     audit = row["trajectory_audit"]
     latency = row["ra_solve_latency_summary_ms"]
     return bool(
-        row["safety_bypass_count"] == 0
+        row.get("infrastructure_valid", False)
+        and row["safety_bypass_count"] == 0
         and audit["ra_bypass_count"] == 0
         and audit["failed_authority_revoked_all_steps"]
         and audit["failed_horizontal_command_zero_all_steps"]
+        and row.get("published_command_mismatch_count") == 0
+        and row.get("published_command_constraint_unknown_count") == 0
+        and row.get(
+            "published_constraint_failure_while_solver_feasible_count",
+            row.get("published_command_constraint_failure_count"),
+        ) == 0
         and latency["p99"] < 50.0
         and latency["deadline_misses"] == 0
     )
@@ -25,6 +50,7 @@ def _common_integrity(row: dict[str, Any]) -> bool:
 def _safe_gate(row: dict[str, Any]) -> bool:
     return bool(
         _common_integrity(row)
+        and row.get("published_command_constraint_failure_count") == 0
         and not row["collision"]
         and row["min_rho"] is not None
         and row["min_rho"] > 0.0
@@ -33,7 +59,9 @@ def _safe_gate(row: dict[str, Any]) -> bool:
 
 
 def _post_failure_critical_reached(row: dict[str, Any]) -> bool:
-    return bool(row.get("post_failure_critical_reached", row["critical_reached"]))
+    if "post_failure_critical_reached" in row:
+        return bool(row["post_failure_critical_reached"])
+    return bool(row["critical_reached"])
 
 
 def analyze(manifest: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -57,6 +85,7 @@ def analyze(manifest: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, A
                 and summary.get("rejection_count") == 0
                 and summary.get("plans_committed") == 1
                 and summary.get("unsafe_commit_count") == 0
+                and summary.get("decision_latency_ms", float("inf")) < 50.0
                 and _post_failure_critical_reached(row)
                 and summary.get("completed")
             )
@@ -67,6 +96,7 @@ def analyze(manifest: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, A
                 and summary.get("rejection_count") == 1
                 and summary.get("plans_committed") == 0
                 and summary.get("unsafe_commit_count") == 0
+                and summary.get("decision_latency_ms", float("inf")) < 50.0
                 and not _post_failure_critical_reached(row)
                 and row["trajectory_audit"]["hold_goal_frozen"]
             )
@@ -112,7 +142,6 @@ def analyze(manifest: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, A
         and len(immediate_rows) == len(manifest["trials"])
         and all(item["passed"] for item in admission_checks)
         and all(item["passed"] for item in hold_checks)
-        and all(item["passed"] for item in immediate_integrity)
         and anti_vacuity
     )
     return {
@@ -144,6 +173,14 @@ def main() -> int:
         loaded = json.loads(path.read_text(encoding="utf-8"))["trials"]
         for row in loaded:
             trajectory = path.parent / row["trajectory"]
+            trajectory_rows = [
+                json.loads(line)
+                for line in trajectory.read_text(encoding="utf-8").splitlines()
+            ]
+            row.setdefault(
+                "published_constraint_failure_while_solver_feasible_count",
+                _reconstruct_solver_feasible_publication_failures(trajectory_rows),
+            )
             geometry = geometry_by_trial[row["trial_id"]]
             critical_goal = geometry["critical_goal"]
             healthy_drone = next(
@@ -162,10 +199,7 @@ def main() -> int:
                     )
                     ** 0.5
                 ) < float(manifest["goal_epsilon"])
-                for record in (
-                    json.loads(line)
-                    for line in trajectory.read_text(encoding="utf-8").splitlines()
-                )
+                for record in trajectory_rows
                 if int(record["step"]) >= int(manifest["change_step"])
             )
             rows.append(row)

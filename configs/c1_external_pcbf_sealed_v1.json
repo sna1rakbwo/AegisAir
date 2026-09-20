@@ -14,7 +14,7 @@
     "AEGIS_HOCBF_V4_REACTIVE": {"role": "Reactive PB takeover", "constraint_boundary": "full", "k1": 4.0, "k2": 4.0, "boundary_guard": 1.0, "boundary_buffer_m": 0.30, "barrier_model_tau_s": 0.70, "predictive_recovery": false, "recovery_alpha": 0.5, "recovery_braking_accel_mps2": 2.0, "recovery_boundary_buffer_m": 0.30, "recovery_clear_steps": 5},
     "AEGIS_HOCBF_V3": {"role": "HOCBF-Fallback", "constraint_boundary": "full", "k1": 4.0, "k2": 4.0, "boundary_guard": 1.0, "boundary_buffer_m": 0.30, "barrier_model_tau_s": 0.70, "infeasible_fallback": "max_brake"},
     "PB_CBF": {"role": "PB-CBF", "constraint_boundary": "static", "alpha": 0.5, "braking_accel_mps2": 2.0, "boundary_buffer_m": 0.30, "infeasible_fallback": "max_brake"},
-    "PCBF_HUANG_ECC2025": {"role": "Published PCBF nonlinear finite-candidate adaptation", "constraint_boundary": "full", "boundary_buffer_m": 0.0, "horizon": 24, "terminal_buffer_m": 0.10, "terminal_velocity_tolerance_mps": 0.0, "slack_weight": 20.0, "tracking_weight": 0.05, "lateral_candidates_mps2": [0.0, 0.5, 1.0, 1.5, 2.0], "fail_closed": "max_brake"}
+    "PCBF_HUANG_ECC2025": {"role": "Huang ECC 2025 multistart nonlinear PCBF adaptation", "constraint_boundary": "full", "boundary_buffer_m": 0.0, "horizon": 24, "terminal_buffer_m": 0.10, "terminal_velocity_tolerance_mps": 0.0, "position_bound_m": 20.0, "velocity_bound_mps": 5.0, "solver": "casadi_ipopt", "max_iterations": 300, "multistart_count": 3, "tolerance": 1e-7, "acceptable_tolerance": 1e-5, "lexicographic_tolerance": 1e-7, "fail_closed": "max_brake"}
   },
   "trials": [
     {"trial_id": "ext01", "seed": 12901, "condition_order": ["AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V3", "PB_CBF", "PCBF_HUANG_ECC2025"]},
@@ -39,5 +39,5 @@
     {"trial_id": "ext20", "seed": 12920, "condition_order": ["PCBF_HUANG_ECC2025", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V3", "PB_CBF"]}
   ],
   "safety_gate": "每个有效 trial 的五个 paired conditions 均完成后检查；collision=false、min_rho>0、mission_complete=true、safety_bypass=0。任一失败后停止未开始 seeds；不调参、不换 seed。",
-  "output_root": "archived_experiment_output_not_public"
+  "output_root": "/Volumes/Expansion/Aegis/c1_external_pcbf_sealed_v1"
 }

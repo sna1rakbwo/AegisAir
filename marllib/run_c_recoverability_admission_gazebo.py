@@ -26,10 +26,10 @@ from swarm.recovery import (
 
 
 PROTOCOL_IDS = {
-    "aegisair-c-recoverability-admission-calibration-v1",
-    "aegisair-c-recoverability-admission-qualification-v1",
-    "aegisair-c-recoverability-admission-sealed-v1",
+    "aegisair-c-recoverability-admission-calibration-v4",
+    "aegisair-c-recoverability-admission-qualification-v4",
 }
+IMPLEMENTATION_VERSION = "dynamic_admission_v4_nonblocking_bridge"
 CONDITIONS = {
     "IMMEDIATE_COMMIT_RA",
     "RECOVERABILITY_ADMISSION_RA",
@@ -76,17 +76,64 @@ def _ra_kwargs(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _admission_config(config: dict[str, Any]) -> RecoverabilityAdmissionConfig:
+def _admission_config(
+    config: dict[str, Any],
+    *,
+    rate_hz: float,
+    execution_tau_s: float,
+    command_feedforward_tau_s: float,
+) -> RecoverabilityAdmissionConfig:
     return RecoverabilityAdmissionConfig(
         clearance_m=float(config["clearance_m"]),
         braking_accel_mps2=float(config["braking_accel_mps2"]),
+        braking_accel_uncertainty_mps2=float(
+            config.get("braking_accel_uncertainty_mps2", 0.25)
+        ),
         ring_extra_m=tuple(float(value) for value in config["ring_extra_m"]),
         ring_samples=int(config["ring_samples"]),
-        obstacle_samples=int(config["obstacle_samples"]),
         arena=tuple(float(value) for value in config["arena"]),
         waypoint_epsilon_m=float(config["waypoint_epsilon_m"]),
         max_route_length_m=float(config["max_route_length_m"]),
+        dt_s=float(config.get("dt_s", 1.0 / rate_hz)),
+        rollout_horizon_s=float(config.get("rollout_horizon_s", 16.0)),
+        reaction_delay_s=float(config.get("reaction_delay_s", 1.0 / rate_hz)),
+        goal_gain_s_inv=float(config.get("goal_gain_s_inv", 1.5)),
+        velocity_gain_s_inv=float(config.get("velocity_gain_s_inv", 2.0)),
+        healthy_velocity_limit_mps=float(
+            config.get("healthy_velocity_limit_mps", 1.5)
+        ),
+        healthy_acceleration_limit_mps2=float(
+            config.get("healthy_acceleration_limit_mps2", 2.0)
+        ),
+        execution_tau_s=float(config.get("execution_tau_s", execution_tau_s)),
+        command_feedforward_tau_s=float(
+            config.get(
+                "command_feedforward_tau_s",
+                command_feedforward_tau_s,
+            )
+        ),
+        terminal_speed_mps=float(config.get("terminal_speed_mps", 0.15)),
+        tracking_error_buffer_m=float(
+            config.get("tracking_error_buffer_m", 0.20)
+        ),
     )
+
+
+def _published_command_audit_summary(run: dict[str, Any]) -> dict[str, int]:
+    return {
+        "published_command_mismatch_count": run[
+            "published_command_mismatch_count"
+        ],
+        "published_command_constraint_unknown_count": run[
+            "published_command_constraint_unknown_count"
+        ],
+        "published_command_constraint_failure_count": run[
+            "published_command_constraint_failure_count"
+        ],
+        "published_constraint_failure_while_solver_feasible_count": run[
+            "published_constraint_failure_while_solver_feasible_count"
+        ],
+    }
 
 
 def _trajectory_audit(
@@ -104,6 +151,7 @@ def _trajectory_audit(
     ]
     after = [row for row in rows if int(row["step"]) >= change_step]
     failed_rows = [row["drones"][str(failed_drone)] for row in after]
+    failed_commands = [row.get("published_velocity") for row in failed_rows]
     admission_rows = [
         row.get("recoverability_admission") for row in after
         if row.get("recoverability_admission") is not None
@@ -126,20 +174,31 @@ def _trajectory_audit(
         and all(row.get("command_authority") == "failed_zero" for row in failed_rows),
         "failed_horizontal_command_zero_all_steps": bool(failed_rows)
         and all(
-            np.linalg.norm(np.asarray(row["v_safe"][:2], dtype=np.float64))
-            <= 1e-9
-            for row in failed_rows
+            command is not None
+            and np.linalg.norm(np.asarray(command[:2], dtype=np.float64)) <= 1e-9
+            for command in failed_commands
         ),
         "selected_qp_infeasible_steps": sum(
             any(drone.get("feasible") is False for drone in row["drones"].values())
             for row in rows
+            if row.get("input_freshness", {}).get("fresh", False)
         ),
         "hold_goal_frozen": not hold_goals
         or all(goal == hold_goals[0] for goal in hold_goals),
         "healthy_post_failure_max_command_mps": max(
             (
-                float(np.linalg.norm(np.asarray(row["drones"][str(healthy_drone)]["v_safe"][:2])))
+                float(
+                    np.linalg.norm(
+                        np.asarray(
+                            row["drones"][str(healthy_drone)][
+                                "published_velocity"
+                            ][:2]
+                        )
+                    )
+                )
                 for row in after
+                if row["drones"][str(healthy_drone)].get("published_velocity")
+                is not None
             ),
             default=0.0,
         ),
@@ -165,6 +224,11 @@ def main() -> int:
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
     if manifest.get("protocol_id") not in PROTOCOL_IDS:
         parser.error(f"protocol_id 必须属于 {sorted(PROTOCOL_IDS)}")
+    if manifest.get("implementation_version") != IMPLEMENTATION_VERSION:
+        parser.error(
+            "implementation_version 必须为 "
+            f"{IMPLEMENTATION_VERSION!r}，旧 manifest 仅保留为历史记录"
+        )
     if args.out_dir.exists():
         parser.error(f"拒绝覆盖输出目录：{args.out_dir}")
     trial = next(
@@ -189,7 +253,12 @@ def main() -> int:
         client = RuleMissionPlanner()
     elif args.condition == "RECOVERABILITY_ADMISSION_RA":
         coordinator = RecoverabilityAdmissionCoordinator(
-            _admission_config(manifest["recoverability_admission"])
+            _admission_config(
+                manifest["recoverability_admission"],
+                rate_hz=float(manifest["rate_hz"]),
+                execution_tau_s=float(manifest["ra_config"]["execution_tau_s"]),
+                command_feedforward_tau_s=float(manifest["tau_command_s"]),
+            )
         )
     else:
         coordinator = RAOnlySafeHoldCoordinator()
@@ -244,6 +313,10 @@ def main() -> int:
         "counters": run.get("counters"),
         "recoverability_admission": run.get("recoverability_admission"),
         "safety_bypass_count": run["safety_bypass_count"],
+        "infrastructure_valid": run["infrastructure_valid"],
+        "infrastructure_invalid_reasons": run["infrastructure_invalid_reasons"],
+        "freshness_gate": run["freshness_gate"],
+        **_published_command_audit_summary(run),
         "ra_solve_latency_summary_ms": run["ra_solve_latency_summary_ms"],
         "trajectory_audit": audit,
         "trajectory": trajectory.name,
