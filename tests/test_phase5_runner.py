@@ -19,6 +19,7 @@ from marllib.phase5_runner import (
     _reset_velocity_command,
     _step_exact_zoh_execution,
     _go_to_goal,
+    _joint_solver_feasible,
     _local_ra_view,
     _latency_summary_ms,
     _joint_published_constraint_status,
@@ -240,6 +241,12 @@ class Phase5CommandEncodingTest(unittest.TestCase):
             solver_velocity_saturated={2: False, 3: False},
         )
         self.assertIsNone(status)
+
+    def test_joint_solver_feasibility_requires_every_solver_to_succeed(self) -> None:
+        self.assertTrue(_joint_solver_feasible({2: True, 3: True}))
+        self.assertFalse(_joint_solver_feasible({2: True, 3: False}))
+        self.assertFalse(_joint_solver_feasible({2: True, 3: None}))
+        self.assertFalse(_joint_solver_feasible({}))
 
     def test_reset_velocity_homes_in_flu_without_exceeding_limits(self) -> None:
         velocity = _reset_velocity_command(

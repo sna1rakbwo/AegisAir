@@ -339,6 +339,12 @@ def _joint_published_constraint_status(
     return None
 
 
+def _joint_solver_feasible(solver_feasible: dict[int, bool | None]) -> bool:
+    return bool(solver_feasible) and all(
+        value is True for value in solver_feasible.values()
+    )
+
+
 def validate_command_path(
     command: dict[str, Any],
     telemetry_state: TelemetryState,
@@ -2716,7 +2722,8 @@ def run_mqtt_loop(
             )
             published_constraint_failure_while_solver_feasible_count += (
                 len(drone_ids)
-                if joint_constraint_ok is False and solver_feasible
+                if joint_constraint_ok is False
+                and _joint_solver_feasible(solver_feasible)
                 else 0
             )
             for row in step_rows.values():

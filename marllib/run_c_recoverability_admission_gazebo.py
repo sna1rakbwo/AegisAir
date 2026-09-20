@@ -119,6 +119,23 @@ def _admission_config(
     )
 
 
+def _published_command_audit_summary(run: dict[str, Any]) -> dict[str, int]:
+    return {
+        "published_command_mismatch_count": run[
+            "published_command_mismatch_count"
+        ],
+        "published_command_constraint_unknown_count": run[
+            "published_command_constraint_unknown_count"
+        ],
+        "published_command_constraint_failure_count": run[
+            "published_command_constraint_failure_count"
+        ],
+        "published_constraint_failure_while_solver_feasible_count": run[
+            "published_constraint_failure_while_solver_feasible_count"
+        ],
+    }
+
+
 def _trajectory_audit(
     path: Path,
     *,
@@ -299,15 +316,7 @@ def main() -> int:
         "infrastructure_valid": run["infrastructure_valid"],
         "infrastructure_invalid_reasons": run["infrastructure_invalid_reasons"],
         "freshness_gate": run["freshness_gate"],
-        "published_command_mismatch_count": run[
-            "published_command_mismatch_count"
-        ],
-        "published_command_constraint_unknown_count": run[
-            "published_command_constraint_unknown_count"
-        ],
-        "published_command_constraint_failure_count": run[
-            "published_command_constraint_failure_count"
-        ],
+        **_published_command_audit_summary(run),
         "ra_solve_latency_summary_ms": run["ra_solve_latency_summary_ms"],
         "trajectory_audit": audit,
         "trajectory": trajectory.name,

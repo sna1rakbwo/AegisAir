@@ -9,6 +9,24 @@ from pathlib import Path
 from typing import Any
 
 
+def _reconstruct_solver_feasible_publication_failures(
+    trajectory_rows: list[dict[str, Any]],
+) -> int:
+    count = 0
+    for record in trajectory_rows:
+        drones = list(record.get("drones", {}).values())
+        if (
+            drones
+            and all(
+                drone.get("published_command_constraint_ok") is False
+                for drone in drones
+            )
+            and all(drone.get("solver_feasible") is True for drone in drones)
+        ):
+            count += len(drones)
+    return count
+
+
 def _common_integrity(row: dict[str, Any]) -> bool:
     audit = row["trajectory_audit"]
     latency = row["ra_solve_latency_summary_ms"]
@@ -155,6 +173,14 @@ def main() -> int:
         loaded = json.loads(path.read_text(encoding="utf-8"))["trials"]
         for row in loaded:
             trajectory = path.parent / row["trajectory"]
+            trajectory_rows = [
+                json.loads(line)
+                for line in trajectory.read_text(encoding="utf-8").splitlines()
+            ]
+            row.setdefault(
+                "published_constraint_failure_while_solver_feasible_count",
+                _reconstruct_solver_feasible_publication_failures(trajectory_rows),
+            )
             geometry = geometry_by_trial[row["trial_id"]]
             critical_goal = geometry["critical_goal"]
             healthy_drone = next(
@@ -173,10 +199,7 @@ def main() -> int:
                     )
                     ** 0.5
                 ) < float(manifest["goal_epsilon"])
-                for record in (
-                    json.loads(line)
-                    for line in trajectory.read_text(encoding="utf-8").splitlines()
-                )
+                for record in trajectory_rows
                 if int(record["step"]) >= int(manifest["change_step"])
             )
             rows.append(row)

@@ -5,12 +5,16 @@ import json
 from pathlib import Path
 import unittest
 
-from marllib.analyze_c_recoverability_admission_calibration import analyze
+from marllib.analyze_c_recoverability_admission_calibration import (
+    _reconstruct_solver_feasible_publication_failures,
+    analyze,
+)
 from marllib.run_c_recoverability_admission_gazebo import (
     CONDITIONS,
     IMPLEMENTATION_VERSION,
     PROTOCOL_IDS,
     _admission_config,
+    _published_command_audit_summary,
 )
 from swarm.recovery.recoverability_admission import (
     RecoverabilityAdmissionCoordinator,
@@ -138,6 +142,57 @@ class RecoverabilityAdmissionProtocolTest(unittest.TestCase):
         self.assertEqual(result["decision"], "NO_GO")
         self.assertFalse(result["complete"])
         self.assertFalse(result["anti_vacuity"])
+
+    def test_summary_preserves_solver_feasible_publication_failures(self) -> None:
+        summary = _published_command_audit_summary(
+            {
+                "published_command_mismatch_count": 1,
+                "published_command_constraint_unknown_count": 2,
+                "published_command_constraint_failure_count": 3,
+                "published_constraint_failure_while_solver_feasible_count": 4,
+            }
+        )
+        self.assertEqual(
+            summary,
+            {
+                "published_command_mismatch_count": 1,
+                "published_command_constraint_unknown_count": 2,
+                "published_command_constraint_failure_count": 3,
+                "published_constraint_failure_while_solver_feasible_count": 4,
+            },
+        )
+
+    def test_old_summary_metric_can_be_reconstructed_from_trajectory(self) -> None:
+        rows = [
+            {
+                "drones": {
+                    "2": {
+                        "published_command_constraint_ok": False,
+                        "solver_feasible": False,
+                    },
+                    "3": {
+                        "published_command_constraint_ok": False,
+                        "solver_feasible": False,
+                    },
+                }
+            },
+            {
+                "drones": {
+                    "2": {
+                        "published_command_constraint_ok": False,
+                        "solver_feasible": True,
+                    },
+                    "3": {
+                        "published_command_constraint_ok": False,
+                        "solver_feasible": True,
+                    },
+                }
+            },
+        ]
+        self.assertEqual(
+            _reconstruct_solver_feasible_publication_failures(rows),
+            2,
+        )
 
     def test_immediate_comparator_is_reported_without_gating_go(self) -> None:
         rows = []
