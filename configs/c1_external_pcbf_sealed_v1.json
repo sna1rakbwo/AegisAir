@@ -39,5 +39,5 @@
     {"trial_id": "ext20", "seed": 12920, "condition_order": ["PCBF_HUANG_ECC2025", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V3", "PB_CBF"]}
   ],
   "safety_gate": "每个有效 trial 的五个 paired conditions 均完成后检查；collision=false、min_rho>0、mission_complete=true、safety_bypass=0。任一失败后停止未开始 seeds；不调参、不换 seed。",
-  "output_root": "archived_experiment_output_not_public"
+  "output_root": "/Volumes/Expansion/Aegis/c1_external_pcbf_sealed_v1"
 }

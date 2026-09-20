@@ -2,9 +2,9 @@
 
 ## 本公开版本包含什么
 
-本仓库提供论文最终采用的运行时安全保障、确定性任务恢复、控制器配置和离线测试。它支持复核算法逻辑、接口契约与冻结配置的一致性。
+本仓库提供运行时安全保障、任务恢复、接口规范、控制器配置和离线测试。它支持复核算法逻辑、接口契约与冻结配置的一致性。
 
-可以用相同配置重新运行新的独立实验。
+本仓库不提供论文、投稿材料、训练 checkpoint、PX4/Gazebo 原始日志、轨迹、ULog、统计汇总或其他实验产物。因此，克隆者不能从本仓库重建历史实验数值；可以用相同配置重新运行新的独立实验。
 
 ## 最小可复现检查
 
@@ -24,8 +24,8 @@ python scripts/validate_dynamic_admission.py
 完整 PX4/Gazebo 复现另需安装 PX4 SITL、Gazebo、ROS 2、MQTT broker 和 AegisAir adapter bridge。服务启动后，以冻结 manifest 运行对应 runner，并使用一个不存在的新输出目录：
 
 ```bash
-python marllib/run_c1_sota_cbf_gazebo.py \
-  --manifest configs/c1_hocbf_v4_px4_validation_v1.json \
+python marllib/run_c3_gazebo.py \
+  --manifest configs/c3_closed_loop_smoke_v1.json \
   --out-dir /path/to/new-output
 ```
 

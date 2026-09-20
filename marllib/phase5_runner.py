@@ -21,7 +21,7 @@ import sys
 import time
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -31,6 +31,8 @@ if str(ROOT) not in sys.path:
 
 from marllib.config import ScenarioConfig
 from marllib.envs.multi_uav import MultiUAVEnv
+if TYPE_CHECKING:
+    from marllib.policies.mappo import MappoPilot
 from px4_adapter.mqtt_codec import (
     TelemetryState,
     decode_command,
@@ -74,6 +76,26 @@ from swarm.recovery import (
     RuleMissionPlanner,
 )
 from swarm.safety import DroneSnapshot, safe_holding_point
+
+
+class _FaultedLlmClient(LLMRecoveryClient):
+    """Deterministic invalid-LLM stand-in for live fault injection."""
+
+    name = "faulted"
+
+    def __init__(self, raw) -> None:
+        self.raw = raw
+
+    def generate(self, context) -> LLMRecoveryResult:
+        return LLMRecoveryResult(
+            plan=None,
+            raw=self.raw,
+            latency_s=0.0,
+            timeout=False,
+            valid=False,
+            errors=[],
+            backend=self.name,
+        )
 
 
 CRUISE_ALTITUDE_M = 2.5
@@ -686,7 +708,7 @@ def _go_to_goal(
     overrides: RecoveryOverrides,
     failed: set[int],
     aborted: set[int],
-    pilot: Any | None = None,
+    pilot: MappoPilot | None = None,
     observed_states: dict[int, Any] | None = None,
 ) -> dict[int, np.ndarray]:
     """Create nominal actions from the caller's visible state.
@@ -993,7 +1015,7 @@ def run_sim_episode(
     execution_audit_samples: int = 0,
     replan_timeout_s: float | None = None,
     immediate_fallback: bool = False,
-    pilot: Any | None = None,
+    pilot: MappoPilot | None = None,
     c1_px4_supervisor_config: C1Px4SupervisorConfig | None = None,
 ) -> dict[str, Any]:
     if observation_mode not in OBSERVATION_MODES:
@@ -1623,8 +1645,8 @@ def run_mqtt_loop(
     estimator_config: SharedStateEstimatorConfig | None = None,
     estimator_seed: int = 0,
     replan_timeout_s: float | None = None,
-    pilot: Any | None = None,
-    coordination_intent_pilot: Any | None = None,
+    pilot: MappoPilot | None = None,
+    coordination_intent_pilot: MappoPilot | None = None,
     execution_supervisor_config: ExecutionSupervisorConfig | None = None,
     freshness_gate_config: TelemetryFreshnessConfig | None = None,
     land_at_end: bool = True,
@@ -2935,6 +2957,25 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--scenario", default="head_on")
     parser.add_argument("--mode", choices=["CBF_ONLY", "ASYNC"], default="ASYNC")
+    parser.add_argument(
+        "--llm", choices=["rule", "qwen", "timeout", "invalid"], default="rule"
+    )
+    parser.add_argument(
+        "--qwen-model",
+        default="/Users/lijiajun/.cache/aegisair-qwen3-4b-4bit-bench",
+    )
+    parser.add_argument("--qwen-max-tokens", type=int, default=48)
+    parser.add_argument(
+        "--pilot",
+        choices=["go_to_goal", "checkpoint"],
+        default="go_to_goal",
+        help="Nominal pilot: rule-based go-to-goal or a trained MAPPO checkpoint.",
+    )
+    parser.add_argument(
+        "--checkpoint",
+        default=None,
+        help="MAPPO final.pt path (required with --pilot checkpoint).",
+    )
     parser.add_argument("--seeds", type=int, default=1)
     parser.add_argument("--max-steps", type=int, default=120)
     parser.add_argument(
@@ -3034,9 +3075,49 @@ def main() -> int:
     if args.dt is not None:
         spec["scenario"] = replace(spec["scenario"], dt=args.dt)
 
-    pilot = None
-    llm_client = RuleMissionPlanner()
-    llm_fallback = None
+    if args.pilot == "checkpoint":
+        if not args.checkpoint:
+            parser.error("--checkpoint is required with --pilot checkpoint")
+        try:
+            from marllib.policies.mappo import MappoPilot
+        except ModuleNotFoundError:
+            parser.error(
+                "--pilot checkpoint requires the non-public MARL checkpoint "
+                "runtime, which is intentionally excluded from this reproduction release"
+            )
+        pilot = MappoPilot(
+            args.checkpoint,
+            obs_dim=4 + 5 * spec["scenario"].max_neighbors,
+            num_agents=spec["scenario"].num_agents,
+            speed_limit=spec["scenario"].speed_limit,
+            max_neighbors=spec["scenario"].max_neighbors,
+        )
+    else:
+        pilot = None
+
+    if args.llm == "rule":
+        llm_client = RuleMissionPlanner()
+        llm_fallback = None
+    elif args.llm == "qwen":
+        try:
+            from swarm.recovery import MlxLmClient
+        except ImportError:
+            parser.error(
+                "--llm qwen requires the optional local MLX runtime, which is "
+                "intentionally excluded from this reproduction release"
+            )
+        llm_client = MlxLmClient(
+            model_id=args.qwen_model,
+            max_tokens=args.qwen_max_tokens,
+            load=True,
+        )
+        llm_fallback = RuleMissionPlanner()
+    elif args.llm == "timeout":
+        llm_client = DeterministicRecoveryClient(plan_latency_s=0.3)
+        llm_fallback = RuleMissionPlanner()
+    else:  # invalid
+        llm_client = _FaultedLlmClient({"action": "HOVER"})
+        llm_fallback = RuleMissionPlanner()
 
     if args.mqtt:
         scenario: ScenarioConfig = spec["scenario"]

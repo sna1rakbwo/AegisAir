@@ -239,6 +239,7 @@ def solve_acceleration_qp(
     iterations = 0
     for iterations in range(1, max_iters + 1):
         previous = x0.copy()
+        previous_corrections = [correction.copy() for correction in corrections]
         cur = x0
         correction_change = 0.0
         for idx in range(len(halfspaces) + 1):
