@@ -69,7 +69,6 @@ from swarm.recovery import (
     DeterministicRecoveryClient,
     LLMRecoveryClient,
     LLMRecoveryResult,
-    MlxLmClient,
     RecoveryContext,
     RecoveryOverrides,
     RecoverabilityAdmissionCoordinator,
@@ -3100,6 +3099,13 @@ def main() -> int:
         llm_client = RuleMissionPlanner()
         llm_fallback = None
     elif args.llm == "qwen":
+        try:
+            from swarm.recovery import MlxLmClient
+        except ImportError:
+            parser.error(
+                "--llm qwen requires the optional local MLX runtime, which is "
+                "intentionally excluded from this reproduction release"
+            )
         llm_client = MlxLmClient(
             model_id=args.qwen_model,
             max_tokens=args.qwen_max_tokens,
