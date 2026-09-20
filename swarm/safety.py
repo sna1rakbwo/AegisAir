@@ -94,6 +94,7 @@ class DroneSnapshot:
     status: str = "unknown"
     last_command_id: str | None = None
     timestamp_ms: int = 0
+    source_timestamp_us: int = 0
 
     @classmethod
     def from_telemetry(cls, payload: dict[str, Any]) -> DroneSnapshot:
@@ -115,6 +116,7 @@ class DroneSnapshot:
             status=str(payload.get("status") or "unknown"),
             last_command_id=payload.get("last_command_id"),
             timestamp_ms=int(payload.get("timestamp_ms") or 0),
+            source_timestamp_us=int(payload.get("source_timestamp_us") or 0),
         )
 
 

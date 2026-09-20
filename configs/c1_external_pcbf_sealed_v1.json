@@ -1,0 +1,43 @@
+{
+  "protocol_id": "aegisair-c1-external-pcbf-sealed-v1",
+  "phase": "sealed_paired_external_baseline",
+  "created_after": "c1_pcbf_huang_ecc2025_calibration_v3",
+  "rate_hz": 20.0,
+  "max_steps": 400,
+  "goal_epsilon": 0.5,
+  "execution_tau_s": 0.70,
+  "drone_ids": [2, 3],
+  "base_goals": {"2": [4.0, -0.5, 2.5], "3": [-4.0, 0.5, 2.5]},
+  "reset_starts": {"2": [-4.0, 0.5, 2.5], "3": [4.0, -0.5, 2.5]},
+  "methods": {
+    "AEGIS_HOCBF_V4": {"role": "AegisAir full hybrid RA", "constraint_boundary": "full", "k1": 4.0, "k2": 4.0, "boundary_guard": 1.0, "boundary_buffer_m": 0.30, "barrier_model_tau_s": 0.70, "predictive_recovery": true, "prediction_execution_fraction": 0.0, "prediction_steps": 3, "recovery_reserve_threshold": 1.0, "recovery_alpha": 0.5, "recovery_braking_accel_mps2": 2.0, "recovery_boundary_buffer_m": 0.30, "recovery_clear_steps": 5},
+    "AEGIS_HOCBF_V4_REACTIVE": {"role": "Reactive PB takeover", "constraint_boundary": "full", "k1": 4.0, "k2": 4.0, "boundary_guard": 1.0, "boundary_buffer_m": 0.30, "barrier_model_tau_s": 0.70, "predictive_recovery": false, "recovery_alpha": 0.5, "recovery_braking_accel_mps2": 2.0, "recovery_boundary_buffer_m": 0.30, "recovery_clear_steps": 5},
+    "AEGIS_HOCBF_V3": {"role": "HOCBF-Fallback", "constraint_boundary": "full", "k1": 4.0, "k2": 4.0, "boundary_guard": 1.0, "boundary_buffer_m": 0.30, "barrier_model_tau_s": 0.70, "infeasible_fallback": "max_brake"},
+    "PB_CBF": {"role": "PB-CBF", "constraint_boundary": "static", "alpha": 0.5, "braking_accel_mps2": 2.0, "boundary_buffer_m": 0.30, "infeasible_fallback": "max_brake"},
+    "PCBF_HUANG_ECC2025": {"role": "Huang ECC 2025 multistart nonlinear PCBF adaptation", "constraint_boundary": "full", "boundary_buffer_m": 0.0, "horizon": 24, "terminal_buffer_m": 0.10, "terminal_velocity_tolerance_mps": 0.0, "position_bound_m": 20.0, "velocity_bound_mps": 5.0, "solver": "casadi_ipopt", "max_iterations": 300, "multistart_count": 3, "tolerance": 1e-7, "acceptable_tolerance": 1e-5, "lexicographic_tolerance": 1e-7, "fail_closed": "max_brake"}
+  },
+  "trials": [
+    {"trial_id": "ext01", "seed": 12901, "condition_order": ["AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V3", "PB_CBF", "PCBF_HUANG_ECC2025"]},
+    {"trial_id": "ext02", "seed": 12902, "condition_order": ["AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V3", "PB_CBF", "PCBF_HUANG_ECC2025", "AEGIS_HOCBF_V4"]},
+    {"trial_id": "ext03", "seed": 12903, "condition_order": ["AEGIS_HOCBF_V3", "PB_CBF", "PCBF_HUANG_ECC2025", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE"]},
+    {"trial_id": "ext04", "seed": 12904, "condition_order": ["PB_CBF", "PCBF_HUANG_ECC2025", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V3"]},
+    {"trial_id": "ext05", "seed": 12905, "condition_order": ["PCBF_HUANG_ECC2025", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V3", "PB_CBF"]},
+    {"trial_id": "ext06", "seed": 12906, "condition_order": ["AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V3", "PB_CBF", "PCBF_HUANG_ECC2025"]},
+    {"trial_id": "ext07", "seed": 12907, "condition_order": ["AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V3", "PB_CBF", "PCBF_HUANG_ECC2025", "AEGIS_HOCBF_V4"]},
+    {"trial_id": "ext08", "seed": 12908, "condition_order": ["AEGIS_HOCBF_V3", "PB_CBF", "PCBF_HUANG_ECC2025", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE"]},
+    {"trial_id": "ext09", "seed": 12909, "condition_order": ["PB_CBF", "PCBF_HUANG_ECC2025", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V3"]},
+    {"trial_id": "ext10", "seed": 12910, "condition_order": ["PCBF_HUANG_ECC2025", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V3", "PB_CBF"]},
+    {"trial_id": "ext11", "seed": 12911, "condition_order": ["AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V3", "PB_CBF", "PCBF_HUANG_ECC2025"]},
+    {"trial_id": "ext12", "seed": 12912, "condition_order": ["AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V3", "PB_CBF", "PCBF_HUANG_ECC2025", "AEGIS_HOCBF_V4"]},
+    {"trial_id": "ext13", "seed": 12913, "condition_order": ["AEGIS_HOCBF_V3", "PB_CBF", "PCBF_HUANG_ECC2025", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE"]},
+    {"trial_id": "ext14", "seed": 12914, "condition_order": ["PB_CBF", "PCBF_HUANG_ECC2025", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V3"]},
+    {"trial_id": "ext15", "seed": 12915, "condition_order": ["PCBF_HUANG_ECC2025", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V3", "PB_CBF"]},
+    {"trial_id": "ext16", "seed": 12916, "condition_order": ["AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V3", "PB_CBF", "PCBF_HUANG_ECC2025"]},
+    {"trial_id": "ext17", "seed": 12917, "condition_order": ["AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V3", "PB_CBF", "PCBF_HUANG_ECC2025", "AEGIS_HOCBF_V4"]},
+    {"trial_id": "ext18", "seed": 12918, "condition_order": ["AEGIS_HOCBF_V3", "PB_CBF", "PCBF_HUANG_ECC2025", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE"]},
+    {"trial_id": "ext19", "seed": 12919, "condition_order": ["PB_CBF", "PCBF_HUANG_ECC2025", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V3"]},
+    {"trial_id": "ext20", "seed": 12920, "condition_order": ["PCBF_HUANG_ECC2025", "AEGIS_HOCBF_V4", "AEGIS_HOCBF_V4_REACTIVE", "AEGIS_HOCBF_V3", "PB_CBF"]}
+  ],
+  "safety_gate": "每个有效 trial 的五个 paired conditions 均完成后检查；collision=false、min_rho>0、mission_complete=true、safety_bypass=0。任一失败后停止未开始 seeds；不调参、不换 seed。",
+  "output_root": "/Volumes/Expansion/Aegis/c1_external_pcbf_sealed_v1"
+}

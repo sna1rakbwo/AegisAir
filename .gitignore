@@ -2,7 +2,18 @@
 __pycache__/
 *.py[cod]
 .venv/
+venv/
 *.egg-info/
+build/
+dist/
+
+# Test, coverage, and type-checker caches
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
 
 # Training/runtime artifacts (kept on the external drive, not in git)
 *.pt
@@ -11,10 +22,22 @@ checkpoints/
 metrics.jsonl
 logs/
 .run_logs/
+results/
+tmp/
+*.log
+
+# Manuscripts and submission packages are kept out of the public code release.
+paper/
+AegisAir_paper_strategy_summary.md
+after_trial_summary.md
+picture1.svg
 
 # Secrets
 deepseek_api_key
 *.key
+.env
+.env.*
+*.pem
 
 # OS
 .DS_Store

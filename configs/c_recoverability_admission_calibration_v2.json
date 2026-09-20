@@ -1,0 +1,104 @@
+{
+  "protocol_id": "aegisair-c-recoverability-admission-calibration-v2",
+  "phase": "development_calibration_dynamic_rollout_not_qualification_or_sealed_evidence",
+  "implementation_version": "dynamic_admission_v2",
+  "rate_hz": 20.0,
+  "max_steps": 800,
+  "goal_epsilon": 0.55,
+  "drone_ids": [2, 3],
+  "failed_drone": 2,
+  "mission_change": {"kind": "fail_drone", "drone": 2},
+  "change_step": 30,
+  "velocity_command_mode": "feedforward_tau",
+  "tau_command_s": 0.7,
+  "conditions": [
+    "IMMEDIATE_COMMIT_RA",
+    "RECOVERABILITY_ADMISSION_RA",
+    "RA_ONLY_HOLD"
+  ],
+  "recoverability_admission": {
+    "model": "time_aligned_dynamic_rollout_v2",
+    "clearance_m": 2.4,
+    "tracking_error_buffer_m": 0.20,
+    "braking_accel_mps2": 2.0,
+    "braking_accel_uncertainty_mps2": 0.25,
+    "ring_extra_m": [0.4, 0.8, 1.2],
+    "ring_samples": 32,
+    "arena": [-6.0, 6.0, -6.0, 6.0],
+    "waypoint_epsilon_m": 0.55,
+    "max_route_length_m": 18.0,
+    "dt_s": 0.05,
+    "rollout_horizon_s": 16.0,
+    "reaction_delay_s": 0.05,
+    "goal_gain_s_inv": 1.5,
+    "velocity_gain_s_inv": 2.0,
+    "healthy_velocity_limit_mps": 1.5,
+    "healthy_acceleration_limit_mps2": 2.0,
+    "execution_tau_s": 0.7,
+    "command_feedforward_tau_s": 0.7,
+    "terminal_speed_mps": 0.15
+  },
+  "ra_config": {
+    "tau_ctrl_s": 0.2,
+    "execution_tau_s": 0.7,
+    "k1": 4.0,
+    "k2": 4.0,
+    "boundary_guard": 1.0,
+    "boundary_buffer_m": 0.3,
+    "prediction_execution_fraction": 0.0,
+    "prediction_steps": 3,
+    "recovery_reserve_threshold": 1.0,
+    "recovery_alpha": 0.5,
+    "recovery_braking_accel_mps2": 2.0,
+    "recovery_boundary_buffer_m": 0.3,
+    "recovery_clear_steps": 5
+  },
+  "geometries": {
+    "on_path_failure": {
+      "description": "Exposed development geometry with the failed vehicle near the direct orphan-goal route.",
+      "world": "S1",
+      "reset_starts": {"2": [-1.5, 0.0, 2.5], "3": [-5.5, 0.0, 2.5]},
+      "base_goals": {"2": [4.0, 0.0, 2.5], "3": [4.0, -2.0, 2.5]},
+      "critical_goal": [4.0, 0.0],
+      "expected_admission": "admit"
+    },
+    "lateral_failure": {
+      "description": "Exposed development geometry with lateral route offset.",
+      "world": "S1",
+      "reset_starts": {"2": [-1.5, 2.0, 2.5], "3": [-4.0, -2.0, 2.5]},
+      "base_goals": {"2": [4.0, 2.0, 2.5], "3": [4.0, -2.0, 2.5]},
+      "critical_goal": [4.0, 2.0],
+      "expected_admission": "admit"
+    },
+    "bottleneck_merge_failure": {
+      "description": "Exposed development geometry with converging routes.",
+      "world": "S1",
+      "reset_starts": {"2": [-1.5, 0.0, 2.5], "3": [-4.0, -1.2, 2.5]},
+      "base_goals": {"2": [4.0, 0.0, 2.5], "3": [4.0, -1.2, 2.5]},
+      "critical_goal": [4.0, 0.0],
+      "expected_admission": "admit"
+    },
+    "occupied_orphan_goal": {
+      "description": "Exposed reject geometry with the failed vehicle occupying the orphan goal.",
+      "world": "S1",
+      "reset_starts": {"2": [2.0, 0.0, 2.5], "3": [-4.0, -2.0, 2.5]},
+      "base_goals": {"2": [2.0, 0.0, 2.5], "3": [4.0, -2.0, 2.5]},
+      "critical_goal": [2.0, 0.0],
+      "expected_admission": "reject"
+    }
+  },
+  "trials": [
+    {"trial_id": "radm2_onpath_dev", "geometry_id": "on_path_failure", "seed": 13301, "condition_order": ["IMMEDIATE_COMMIT_RA", "RECOVERABILITY_ADMISSION_RA", "RA_ONLY_HOLD"]},
+    {"trial_id": "radm2_lateral_dev", "geometry_id": "lateral_failure", "seed": 13302, "condition_order": ["RECOVERABILITY_ADMISSION_RA", "RA_ONLY_HOLD", "IMMEDIATE_COMMIT_RA"]},
+    {"trial_id": "radm2_bottleneck_dev", "geometry_id": "bottleneck_merge_failure", "seed": 13303, "condition_order": ["RA_ONLY_HOLD", "IMMEDIATE_COMMIT_RA", "RECOVERABILITY_ADMISSION_RA"]},
+    {"trial_id": "radm2_reject_dev", "geometry_id": "occupied_orphan_goal", "seed": 13304, "condition_order": ["IMMEDIATE_COMMIT_RA", "RA_ONLY_HOLD", "RECOVERABILITY_ADMISSION_RA"]}
+  ],
+  "calibration_go_criteria": {
+    "admitted": "Every expected admit must commit once, complete the orphan goal, remain collision-free with positive sampled margin, retain valid command authority, and pass the published-command audit.",
+    "rejected": "Every expected reject must commit no route, preserve a frozen hold, remain collision-free with positive sampled margin, retain valid command authority, and pass the published-command audit.",
+    "dynamic_model": "Each admission summary must record effective clearance, conservative braking capability, dynamic candidate counts, predicted completion time, terminal speed, and time-aligned minimum clearance.",
+    "anti_vacuity": "Calibration must contain at least one admitted and one rejected case."
+  },
+  "stopping_rule": "Any valid admission-condition failure is a calibration No-Go. Parameters, geometries, seeds, and expected outcomes may not be changed after the first valid run of this manifest; infrastructure-invalid starts may be repeated unchanged.",
+  "claim_boundary": "This exposed development calibration checks the corrected two-UAV dynamic admission implementation. It is not qualification or sealed evidence and does not support arbitrary multi-UAV task allocation."
+}

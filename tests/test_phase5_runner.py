@@ -3,30 +3,41 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
 
 import numpy as np
 
 from marllib.envs.multi_uav import MultiUAVEnv
 from marllib.phase5_runner import (
     CRUISE_ALTITUDE_M,
+    COMMAND_TTL_S,
     OBSERVATION_LOCAL_FRESH_SELF,
     _audit_exact_zoh_interval,
+    _audit_published_command,
+    _command_authority,
     _priority_order,
     _reset_velocity_command,
     _step_exact_zoh_execution,
     _go_to_goal,
+    _joint_solver_feasible,
     _local_ra_view,
+    _latency_summary_ms,
+    _joint_published_constraint_status,
     _propagate_states,
     _scenario,
     _snapshots,
     _estimator_config_for_fault,
     _estimated_states_and_aoi,
+    _freeze_holding_points,
     build_phase5_command,
+    build_phase5_hold_command,
     build_phase5_velocity_command,
     flu_snapshot_to_telemetry_state,
     run_sim_episode,
+    run_mqtt_loop,
     snapshot_from_telemetry,
     validate_command_path,
+    _velocity_for_command_mode,
 )
 from px4_adapter.mqtt_codec import decode_command, normalize_command_to_ned
 from swarm.estimation import EstimatedState, SharedStateEstimator, SharedStateEstimatorConfig
@@ -37,9 +48,36 @@ from swarm.safety import DroneSnapshot
 
 
 class Phase5CommandEncodingTest(unittest.TestCase):
+    def test_live_command_authority_is_fail_closed(self) -> None:
+        self.assertEqual(
+            _command_authority(failed_or_aborted=False), ("ra_filtered", False)
+        )
+        self.assertEqual(
+            _command_authority(failed_or_aborted=True), ("failed_zero", False)
+        )
+
+    def test_latency_summary_keeps_deadline_outlier(self) -> None:
+        summary = _latency_summary_ms([1.0, 2.0, 51.0], deadline_ms=50.0)
+        self.assertEqual(summary["max"], 51.0)
+        self.assertEqual(summary["deadline_misses"], 1)
+
+    def test_live_runner_defaults_to_landing_after_a_standalone_episode(self) -> None:
+        import inspect
+
+        self.assertTrue(
+            inspect.signature(run_mqtt_loop).parameters["land_at_end"].default
+        )
     def test_priority_order_puts_urgent_first(self) -> None:
         self.assertEqual(_priority_order([2, 3, 4, 5], urgent_drone=4), [4, 2, 3, 5])
         self.assertEqual(_priority_order([2, 3, 4, 5]), [2, 3, 4, 5])
+
+    def test_sequential_holding_points_are_frozen_at_activation(self) -> None:
+        positions = {2: np.array([-1.0, 0.0]), 3: np.array([1.0, 0.0])}
+        holding = _freeze_holding_points([2, 3], positions)
+        positions[2][:] = (-5.0, 0.0)
+        positions[3][:] = (5.0, 0.0)
+        self.assertEqual(holding[2], (-2.5, 0.0, 0.0))
+        self.assertEqual(holding[3], (2.5, 0.0, 0.0))
 
     def test_high_closing_scenario_has_higher_speed_limit(self) -> None:
         self.assertEqual(_scenario("high_closing")["scenario"].speed_limit, 2.0)
@@ -117,6 +155,98 @@ class Phase5CommandEncodingTest(unittest.TestCase):
         self.assertEqual(command["action"], "velocity")
         self.assertEqual(command["source_frame"], "FLU")
         self.assertEqual(command["velocity"], [1.0, -0.5, 0.2])
+        self.assertEqual(command["ttl_sec"], COMMAND_TTL_S)
+
+    def test_adapter_watchdog_expires_continuous_command_at_freshness_limit(self) -> None:
+        command = build_phase5_velocity_command(
+            drone=2,
+            safe_velocity=(1.0, 0.0),
+            vertical_velocity=0.0,
+            timestamp_ms=1000,
+        )
+        state = flu_snapshot_to_telemetry_state(
+            2,
+            (0.0, 0.0, CRUISE_ALTITUDE_M),
+            (0.0, 0.0, 0.0),
+            timestamp_ms=1160,
+        )
+        allowed, reason = validate_command_path(command, state, now_ms=1160)
+        self.assertFalse(allowed)
+        self.assertEqual(reason, "command_expired")
+
+    def test_stale_fallback_is_adapter_local_hold(self) -> None:
+        command = build_phase5_hold_command(drone=2, timestamp_ms=1000)
+        self.assertEqual(command["action"], "hold")
+        self.assertNotIn("target", command)
+        self.assertNotIn("velocity", command)
+
+    def test_feedforward_mode_uses_solver_selected_safe_action(self) -> None:
+        result = SimpleNamespace(
+            nominal_action=(1.0, 0.0),
+            safe_action=(0.25, -0.5),
+            a_safe=(2.0, 2.0),
+        )
+        np.testing.assert_allclose(
+            _velocity_for_command_mode(result, "feedforward_tau"),
+            [0.25, -0.5],
+        )
+
+    def test_published_command_audit_detects_post_solver_override(self) -> None:
+        command = build_phase5_velocity_command(
+            drone=2,
+            safe_velocity=(0.0, 0.0),
+            vertical_velocity=0.0,
+            timestamp_ms=1000,
+        )
+        audit = _audit_published_command(
+            solver_selected_velocity=(0.5, 0.0),
+            published_command=command,
+            reference_velocity=(0.0, 0.0),
+            command_scale_s=0.5,
+            fallback_reason="C1_BRAKE_LATCH",
+        )
+        self.assertFalse(audit["published_command_matches_selected"])
+        self.assertEqual(audit["published_effective_acceleration"], [0.0, 0.0])
+
+    def test_published_command_audit_preserves_solver_claim_only_on_exact_match(self) -> None:
+        command = build_phase5_velocity_command(
+            drone=2,
+            safe_velocity=(0.5, -0.25),
+            vertical_velocity=0.0,
+            timestamp_ms=1000,
+        )
+        audit = _audit_published_command(
+            solver_selected_velocity=(0.5, -0.25),
+            published_command=command,
+            reference_velocity=(0.0, 0.0),
+            command_scale_s=0.5,
+            fallback_reason=None,
+        )
+        self.assertTrue(audit["published_command_matches_selected"])
+        self.assertTrue(
+            _joint_published_constraint_status(
+                command_audits={2: audit},
+                solver_feasible={2: True},
+                solver_velocity_saturated={2: False},
+            )
+        )
+
+    def test_joint_command_audit_rejects_partial_match(self) -> None:
+        status = _joint_published_constraint_status(
+            command_audits={
+                2: {"published_command_matches_selected": True},
+                3: {"published_command_matches_selected": False},
+            },
+            solver_feasible={2: True, 3: True},
+            solver_velocity_saturated={2: False, 3: False},
+        )
+        self.assertIsNone(status)
+
+    def test_joint_solver_feasibility_requires_every_solver_to_succeed(self) -> None:
+        self.assertTrue(_joint_solver_feasible({2: True, 3: True}))
+        self.assertFalse(_joint_solver_feasible({2: True, 3: False}))
+        self.assertFalse(_joint_solver_feasible({2: True, 3: None}))
+        self.assertFalse(_joint_solver_feasible({}))
 
     def test_reset_velocity_homes_in_flu_without_exceeding_limits(self) -> None:
         velocity = _reset_velocity_command(
@@ -200,12 +330,14 @@ class Phase5CommandEncodingTest(unittest.TestCase):
             "position": [1.0, 2.0, 3.0],
             "velocity": [0.1, 0.2, 0.3],
             "timestamp_ms": 7,
+            "source_timestamp_us": 7000,
             "status": "armed",
         }
         snapshot = snapshot_from_telemetry(payload)
         self.assertEqual(snapshot.drone_id, 2)
         self.assertEqual(snapshot.position, (1.0, 2.0, 3.0))
         self.assertEqual(snapshot.velocity, (0.1, 0.2, 0.3))
+        self.assertEqual(snapshot.source_timestamp_us, 7000)
 
 
 class Phase6FaultInjectionTest(unittest.TestCase):
@@ -371,6 +503,35 @@ class EstimatorWiringTest(unittest.TestCase):
             observation_mode=OBSERVATION_LOCAL_FRESH_SELF,
         )
         self.assertEqual(local["observation_mode"], OBSERVATION_LOCAL_FRESH_SELF)
+
+    def test_failure_is_passed_to_ra_as_a_fixed_action(self) -> None:
+        class RecordingRA(RuntimeAssurance):
+            def __init__(self) -> None:
+                super().__init__(params=RuntimeAssuranceParams(tau_ctrl=0.0))
+                self.fixed_history: list[dict[int, np.ndarray]] = []
+
+            def filter(self, *args, fixed_actions=None, **kwargs):
+                self.fixed_history.append(dict(fixed_actions or {}))
+                return super().filter(
+                    *args, fixed_actions=fixed_actions, **kwargs
+                )
+
+        spec = _scenario("drone_failure")
+        env = MultiUAVEnv(spec["scenario"])
+        ra = RecordingRA()
+        run_sim_episode(
+            spec=spec,
+            env=env,
+            seed=1,
+            ra=ra,
+            mode="CBF_ONLY",
+            llm_client=None,
+            llm_fallback=None,
+            max_steps=16,
+            real_time=False,
+        )
+        self.assertNotIn(0, ra.fixed_history[14])
+        np.testing.assert_array_equal(ra.fixed_history[15][0], np.zeros(2))
 
 
 if __name__ == "__main__":

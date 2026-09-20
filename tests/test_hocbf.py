@@ -8,6 +8,7 @@ import numpy as np
 
 from swarm.ra.hocbf import (
     beta_of_tau,
+    minimum_acceleration_box_reserve,
     solve_acceleration_qp,
     solve_robust_sampled_data_qp,
     solve_sampled_data_qp,
@@ -85,6 +86,66 @@ class HocbfQpTest(unittest.TestCase):
         )
         self.assertTrue(feasible)
         np.testing.assert_allclose(a_safe[0], [0.5, 0.0])
+
+    def test_qp_uses_only_remaining_authority_for_revoked_agent(self) -> None:
+        fixed = np.zeros(2)
+        a_safe, feasible, iterations = solve_acceleration_qp(
+            a_nom={0: np.zeros(2), 1: fixed},
+            positions={0: np.array([0.0, 0.0]), 1: np.array([1.2, 0.0])},
+            velocities={0: np.array([1.0, 0.0]), 1: np.zeros(2)},
+            d_safe={(0, 1): 0.8},
+            k1=0.5,
+            k2=0.5,
+            a_max=2.0,
+            fixed_accelerations={1: fixed},
+        )
+        self.assertTrue(feasible)
+        self.assertLess(iterations, 100)
+        np.testing.assert_allclose(a_safe[0], [-1.0 / 12.0, 0.0], atol=1e-7)
+        np.testing.assert_array_equal(a_safe[1], fixed)
+
+    def test_reserve_excludes_revoked_agent_control_budget(self) -> None:
+        common = dict(
+            positions={0: np.array([0.0, 0.0]), 1: np.array([1.2, 0.0])},
+            velocities={0: np.array([1.0, 0.0]), 1: np.zeros(2)},
+            d_safe={(0, 1): 0.8},
+            k1=0.5,
+            k2=0.5,
+            a_max=2.0,
+        )
+        cooperative = minimum_acceleration_box_reserve(**common)
+        revoked = minimum_acceleration_box_reserve(
+            **common, fixed_accelerations={1: np.zeros(2)}
+        )
+        self.assertLess(revoked, cooperative)
+
+    def test_infeasible_max_brake_uses_full_available_acceleration(self) -> None:
+        positions = {0: np.array([-0.5, 0.0]), 1: np.array([0.5, 0.0])}
+        velocities = {0: np.array([1.0, 0.0]), 1: np.array([-1.0, 0.0])}
+        a_safe, feasible, _ = solve_acceleration_qp(
+            a_nom={0: np.zeros(2), 1: np.zeros(2)},
+            positions=positions,
+            velocities=velocities,
+            d_safe={(0, 1): 2.0},
+            k1=4.0,
+            k2=6.0,
+            a_max=2.0,
+            infeasible_fallback="max_brake",
+        )
+        self.assertFalse(feasible)
+        np.testing.assert_allclose(a_safe[0], [-2.0, 0.0])
+        np.testing.assert_allclose(a_safe[1], [2.0, 0.0])
+
+    def test_box_reserve_is_negative_when_pair_is_unrecoverable(self) -> None:
+        reserve = minimum_acceleration_box_reserve(
+            positions={0: np.array([-0.5, 0.0]), 1: np.array([0.5, 0.0])},
+            velocities={0: np.array([1.0, 0.0]), 1: np.array([-1.0, 0.0])},
+            d_safe={(0, 1): 2.0},
+            k1=4.0,
+            k2=6.0,
+            a_max=2.0,
+        )
+        self.assertLess(reserve, 0.0)
 
     def test_sampled_data_qp_lag_alpha_reduces_responsiveness(self) -> None:
         a_nom = {0: np.array([0.0, 0.0]), 1: np.array([0.0, 0.0])}

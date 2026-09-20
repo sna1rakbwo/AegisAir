@@ -1,44 +1,46 @@
-"""Huang et al. (ECC 2025) PCBF 的最小、确定性双机适配。
+"""Huang et al. (ECC 2025) predictive control barrier function baseline.
 
-该模块实现论文中安全 MPC 的核心结构：预测域中的软状态约束、硬输入
-约束和硬终端不变集合；每周期仅执行最优控制序列第一项。它刻意独立于
-HOCBF/PB-CBF，供 Gate 0 离线复现使用，尚未接入 PX4 runner。
+The primary nonlinear program follows Eq. (8) of the paper and minimizes only
+the sum of state-constraint slacks. A second, lexicographic program preserves
+that PCBF value while minimizing the deviation of the first input from the
+nominal command. This tie-break selects a mission-compatible input from the
+primary problem's numerical optimum set without changing its objective.
 
-为保持无额外求解器依赖，优化器采用 projected subgradient：对当前 pair
-line-of-sight 的线性内近似 ``n^T(p_i-p_j) >= d`` 建模。该近似是欧氏距离
-安全约束的保守充分条件；每次重规划都会更新 ``n``。终端集合为
-``n^T(p_i-p_j) >= d_terminal`` 且相对投影速度不再接近，零加速度局部控制
-器保持该终端集不变。
+Squared Euclidean UAV separation is a declared nonlinear common-testbed
+adaptation of the paper's state set. The hard terminal set contains separated,
+stopped agents; zero acceleration keeps this set invariant under the prediction
+model. IPOPT returns local solutions for this non-convex adaptation, so solver
+status and residuals are exposed rather than presented as a global optimum.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
+from itertools import count
+from typing import Any
 
+import casadi as ca
 import numpy as np
 
 
 @dataclass(frozen=True)
 class PCBFConfig:
-    """冻结前仅允许在 calibration 中选择的 PCBF 数值参数。"""
+    """Numerical and model parameters for the two-stage PCBF solve."""
 
     horizon: int = 20
     dt: float = 0.05
-    # ``a`` is converted into a realized one-sample velocity increment by this
-    # frozen interface gain. Gate 0 uses physical double-integrator scaling
-    # (dt); live adaptation supplies the PX4 first-order realized gain.
     control_scale_s: float | None = None
     a_max: float = 2.0
     terminal_buffer_m: float = 0.10
     terminal_velocity_tolerance_mps: float = 0.0
-    slack_weight: float = 20.0
-    tracking_weight: float = 0.05
-    velocity_tracking_weight: float = 0.50
-    iterations: int = 1200
-    step_size: float = 0.03
-    projection_iterations: int = 400
-    tolerance: float = 1e-6
-    lateral_candidates: tuple[float, ...] = (0.0, 0.5, 1.0, 1.5, 2.0)
+    position_bound_m: float = 20.0
+    velocity_bound_mps: float = 5.0
+    max_iterations: int = 300
+    multistart_count: int = 3
+    tolerance: float = 1e-7
+    acceptable_tolerance: float = 1e-5
+    lexicographic_tolerance: float = 1e-7
 
     def __post_init__(self) -> None:
         if self.horizon < 2:
@@ -51,16 +53,18 @@ class PCBFConfig:
             raise ValueError("PCBF terminal buffer must be non-negative")
         if self.terminal_velocity_tolerance_mps < 0.0:
             raise ValueError("PCBF terminal velocity tolerance must be non-negative")
+        if self.position_bound_m <= 0.0 or self.velocity_bound_mps <= 0.0:
+            raise ValueError("PCBF state bounds must be positive")
+        if self.max_iterations < 1:
+            raise ValueError("PCBF max_iterations must be positive")
+        if not 1 <= self.multistart_count <= 4:
+            raise ValueError("PCBF multistart_count must be in [1, 4]")
         if (
-            self.slack_weight <= 0.0
-            or self.tracking_weight <= 0.0
-            or self.velocity_tracking_weight <= 0.0
+            self.tolerance <= 0.0
+            or self.acceptable_tolerance <= 0.0
+            or self.lexicographic_tolerance < 0.0
         ):
-            raise ValueError("PCBF objective weights must be positive")
-        if self.iterations < 1 or self.projection_iterations < 1:
-            raise ValueError("PCBF iteration counts must be positive")
-        if self.step_size <= 0.0 or self.tolerance <= 0.0:
-            raise ValueError("PCBF step size and tolerance must be positive")
+            raise ValueError("PCBF numerical tolerances are invalid")
 
 
 @dataclass(frozen=True)
@@ -74,119 +78,59 @@ class PCBFResult:
     status: str
     fail_closed_reason: str | None
     plan: np.ndarray | None
+    stage1_status: str | None = None
+    stage2_status: str | None = None
+    max_constraint_violation: float = float("inf")
+    tracking_cost: float = float("inf")
+    tie_break_applied: bool = False
+    warm_start_used: bool = False
 
 
-def _solve_candidate_pcbf(
-    *,
-    nominal: np.ndarray,
-    positions: dict[int, np.ndarray],
+@dataclass(frozen=True)
+class _SolverBundle:
+    stage1: Any
+    stage2: Any
+    lbg_stage1: np.ndarray
+    ubg_stage1: np.ndarray
+    lbg_stage2: np.ndarray
+    ubg_stage2: np.ndarray
+    n_controls: int
+    n_variables: int
+    n_parameters: int
+
+
+@dataclass(frozen=True)
+class _SolveAttempt:
+    decision: np.ndarray
+    objective: float
+    iterations: int
+    status: str
+    success: bool
+    max_violation: float
+    lam_x: np.ndarray | None
+    lam_g: np.ndarray | None
+
+
+_SOLVER_IDS = count()
+
+
+def _brake(
     velocities: dict[int, np.ndarray],
-    safe_distances: dict[tuple[int, int], float],
-    drone_ids: list[int],
-    config: PCBFConfig,
-) -> PCBFResult:
-    """Fast nonlinear PCBF adaptation for the two-UAV comparison.
-
-    The published PCBF formulation permits nonlinear dynamics/constraints.
-    Here the finite-horizon optimization is solved over a deterministic bank
-    of nominal and left/right avoidance sequences.  Every candidate is scored
-    with the actual Euclidean distance constraint and a terminal bounded-
-    braking recoverability condition.  This removes the invalid fixed-ray
-    approximation while keeping runtime bounded and auditable.
-    """
-    if len(drone_ids) != 2 or len(safe_distances) != 1:
-        raise ValueError("candidate PCBF currently supports the frozen two-UAV C1 comparison")
-    i, j = next(iter(safe_distances))
-    distance_safe = float(safe_distances[(i, j)])
-    relative = positions[i] - positions[j]
-    distance = float(np.linalg.norm(relative))
-    if distance <= 1e-9:
-        return PCBFResult(
-            accelerations=_brake(velocities, config.a_max), feasible=False,
-            terminal_feasible=False, value=float("inf"), slack_sum=float("inf"),
-            iterations=0, status="fail_closed", fail_closed_reason="coincident_pair", plan=None,
-        )
-    radial = relative / distance
-    tangent = np.array([-radial[1], radial[0]], dtype=np.float64)
-    index = {drone: idx for idx, drone in enumerate(drone_ids)}
-    candidates: list[np.ndarray] = []
-    for sign in (1.0, -1.0):
-        for magnitude in config.lateral_candidates:
-            plan = np.repeat(nominal[None, :, :], config.horizon, axis=0)
-            if magnitude > 0.0:
-                # Symmetric lateral separation preserves center-of-mass motion.
-                plan[:, index[i]] += sign * magnitude * tangent
-                plan[:, index[j]] -= sign * magnitude * tangent
-            candidates.append(np.clip(plan, -config.a_max, config.a_max))
-
-    best: tuple[float, float, float, np.ndarray] | None = None
-    for plan in candidates:
-        predicted_p, predicted_v = _predict(
-            plan, positions=positions, velocities=velocities,
-            drone_ids=drone_ids, config=config,
-        )
-        violations = []
-        for step in range(1, config.horizon + 1):
-            predicted_distance = float(np.linalg.norm(predicted_p[i][step] - predicted_p[j][step]))
-            violations.append(max(0.0, distance_safe - predicted_distance))
-        terminal_r = predicted_p[i][-1] - predicted_p[j][-1]
-        terminal_v = predicted_v[i][-1] - predicted_v[j][-1]
-        terminal_distance = float(np.linalg.norm(terminal_r))
-        terminal_n = terminal_r / terminal_distance if terminal_distance > 1e-9 else radial
-        terminal_closing = max(0.0, -float(terminal_n @ terminal_v))
-        # Both vehicles may brake, hence relative braking authority is 2*a_max.
-        recovery_margin = (
-            terminal_distance
-            - distance_safe
-            - terminal_closing**2 / (4.0 * config.a_max)
-        )
-        terminal_deficit = max(0.0, config.terminal_buffer_m - recovery_margin)
-        slack_sum = float(sum(violations))
-        tracking_cost = float(np.sum((plan - nominal[None, :, :]) ** 2))
-        score = (
-            config.slack_weight * 1000.0 * slack_sum
-            + config.slack_weight * 1000.0 * terminal_deficit
-            + config.tracking_weight * tracking_cost
-        )
-        candidate = (score, slack_sum, terminal_deficit, plan)
-        if best is None or candidate[0] < best[0]:
-            best = candidate
-    assert best is not None
-    score, slack_sum, terminal_deficit, plan = best
-    terminal_feasible = terminal_deficit <= config.tolerance
-    if not terminal_feasible:
-        return PCBFResult(
-            accelerations=_brake(velocities, config.a_max), feasible=False,
-            terminal_feasible=False, value=score, slack_sum=slack_sum,
-            iterations=len(candidates), status="fail_closed",
-            fail_closed_reason="terminal_recovery_infeasible", plan=plan,
-        )
-    return PCBFResult(
-        accelerations={drone: plan[0, index[drone]].copy() for drone in drone_ids},
-        feasible=True, terminal_feasible=True, value=score,
-        slack_sum=slack_sum, iterations=len(candidates),
-        status="optimal_approx", fail_closed_reason=None, plan=plan,
-    )
-
-
-def _brake(velocities: dict[int, np.ndarray], a_max: float) -> dict[int, np.ndarray]:
-    output = {}
+    a_max: float,
+    fixed_accelerations: dict[int, np.ndarray] | None = None,
+) -> dict[int, np.ndarray]:
+    output: dict[int, np.ndarray] = {}
+    fixed_accelerations = fixed_accelerations or {}
     for drone, velocity in velocities.items():
-        v = np.asarray(velocity, dtype=np.float64)
-        speed = float(np.linalg.norm(v))
-        output[drone] = (-a_max * v / speed) if speed > 1e-9 else np.zeros(2)
+        if drone in fixed_accelerations:
+            output[drone] = fixed_accelerations[drone].copy()
+            continue
+        vector = np.asarray(velocity, dtype=np.float64)
+        speed = float(np.linalg.norm(vector))
+        output[drone] = (
+            -a_max * vector / speed if speed > 1e-9 else np.zeros(2, dtype=np.float64)
+        )
     return output
-
-
-def _control_coefficient(
-    step: int, control_step: int, dt: float, control_scale_s: float
-) -> float:
-    """Coefficient from ``a_control_step`` to position at ``step``."""
-    return (
-        dt * control_scale_s * (step - control_step - 0.5)
-        if control_step < step
-        else 0.0
-    )
 
 
 def _predict(
@@ -197,114 +141,545 @@ def _predict(
     drone_ids: list[int],
     config: PCBFConfig,
 ) -> tuple[dict[int, np.ndarray], dict[int, np.ndarray]]:
-    """Return predicted positions/velocities with shape ``(H+1, 2)``."""
     predicted_p: dict[int, np.ndarray] = {}
     predicted_v: dict[int, np.ndarray] = {}
-    for index, drone in enumerate(drone_ids):
+    control_scale = config.control_scale_s or config.dt
+    for agent_index, drone in enumerate(drone_ids):
         p = np.zeros((config.horizon + 1, 2), dtype=np.float64)
         v = np.zeros((config.horizon + 1, 2), dtype=np.float64)
         p[0] = positions[drone]
         v[0] = velocities[drone]
         for step in range(config.horizon):
-            a = plan[step, index]
-            control_scale = config.control_scale_s or config.dt
+            acceleration = plan[step, agent_index]
             p[step + 1] = (
                 p[step]
                 + config.dt * v[step]
-                + 0.5 * config.dt * control_scale * a
+                + 0.5 * config.dt * control_scale * acceleration
             )
-            v[step + 1] = v[step] + control_scale * a
+            v[step + 1] = v[step] + control_scale * acceleration
         predicted_p[drone] = p
         predicted_v[drone] = v
     return predicted_p, predicted_v
 
 
-def _terminal_halfspaces(
+def _append_constraint(
+    constraints: list[Any],
+    lower: list[float],
+    upper: list[float],
+    expression: Any,
+    lb: float,
+    ub: float,
+) -> None:
+    constraints.append(expression)
+    lower.append(lb)
+    upper.append(ub)
+
+
+@lru_cache(maxsize=16)
+def _build_solver_bundle(
+    *,
+    horizon: int,
+    drone_count: int,
+    pair_indices: tuple[tuple[int, int], ...],
+    dt: float,
+    control_scale: float,
+    terminal_buffer: float,
+    terminal_velocity_tolerance: float,
+    position_bound: float,
+    velocity_bound: float,
+    max_iterations: int,
+    tolerance: float,
+    acceptable_tolerance: float,
+) -> _SolverBundle:
+    controls_per_step = 2 * drone_count
+    pair_count = len(pair_indices)
+    n_parameters = 6 * drone_count + pair_count
+
+    parameters = ca.MX.sym("parameters", n_parameters)
+    controls = ca.MX.sym("controls", controls_per_step, horizon)
+    slacks = ca.MX.sym("slacks", horizon)
+    decision = ca.vertcat(ca.reshape(controls, -1, 1), slacks)
+
+    velocity_offset = 2 * drone_count
+    distance_offset = 4 * drone_count
+    nominal_offset = distance_offset + pair_count
+    positions = [parameters[2 * i : 2 * i + 2] for i in range(drone_count)]
+    velocities = [
+        parameters[velocity_offset + 2 * i : velocity_offset + 2 * i + 2]
+        for i in range(drone_count)
+    ]
+
+    position_rollout: list[list[Any]] = [positions]
+    velocity_rollout: list[list[Any]] = [velocities]
+    for step in range(horizon):
+        next_positions: list[Any] = []
+        next_velocities: list[Any] = []
+        for agent_index in range(drone_count):
+            acceleration = controls[2 * agent_index : 2 * agent_index + 2, step]
+            next_positions.append(
+                position_rollout[-1][agent_index]
+                + dt * velocity_rollout[-1][agent_index]
+                + 0.5 * dt * control_scale * acceleration
+            )
+            next_velocities.append(
+                velocity_rollout[-1][agent_index] + control_scale * acceleration
+            )
+        position_rollout.append(next_positions)
+        velocity_rollout.append(next_velocities)
+
+    constraints: list[Any] = []
+    lower: list[float] = []
+    upper: list[float] = []
+    for step in range(horizon):
+        for agent_index in range(drone_count):
+            for component in range(2):
+                _append_constraint(
+                    constraints,
+                    lower,
+                    upper,
+                    position_rollout[step][agent_index][component],
+                    -position_bound,
+                    position_bound,
+                )
+                _append_constraint(
+                    constraints,
+                    lower,
+                    upper,
+                    velocity_rollout[step][agent_index][component],
+                    -velocity_bound,
+                    velocity_bound,
+                )
+        for pair_index, (first, second) in enumerate(pair_indices):
+            safe_distance = parameters[distance_offset + pair_index]
+            relative = position_rollout[step][first] - position_rollout[step][second]
+            _append_constraint(
+                constraints,
+                lower,
+                upper,
+                safe_distance * safe_distance
+                - ca.dot(relative, relative)
+                - slacks[step],
+                -ca.inf,
+                0.0,
+            )
+
+    for agent_index in range(drone_count):
+        for component in range(2):
+            _append_constraint(
+                constraints,
+                lower,
+                upper,
+                position_rollout[horizon][agent_index][component],
+                -position_bound,
+                position_bound,
+            )
+            _append_constraint(
+                constraints,
+                lower,
+                upper,
+                velocity_rollout[horizon][agent_index][component],
+                -velocity_bound,
+                velocity_bound,
+            )
+            _append_constraint(
+                constraints,
+                lower,
+                upper,
+                velocity_rollout[horizon][agent_index][component],
+                -terminal_velocity_tolerance,
+                terminal_velocity_tolerance,
+            )
+    for pair_index, (first, second) in enumerate(pair_indices):
+        terminal_distance = parameters[distance_offset + pair_index] + terminal_buffer
+        terminal_relative = (
+            position_rollout[horizon][first] - position_rollout[horizon][second]
+        )
+        _append_constraint(
+            constraints,
+            lower,
+            upper,
+            terminal_distance * terminal_distance
+            - ca.dot(terminal_relative, terminal_relative),
+            -ca.inf,
+            0.0,
+        )
+
+    common_constraints = ca.vertcat(*constraints)
+    primary_objective = ca.sum1(slacks)
+    nominal_first = parameters[nominal_offset : nominal_offset + controls_per_step]
+    tracking_objective = ca.sumsqr(controls[:, 0] - nominal_first)
+
+    solver_options = {
+        "print_time": False,
+        "error_on_fail": False,
+        "expand": True,
+        "ipopt": {
+            "print_level": 0,
+            "sb": "yes",
+            "max_iter": max_iterations,
+            "tol": tolerance,
+            "acceptable_tol": acceptable_tolerance,
+            "acceptable_constr_viol_tol": acceptable_tolerance,
+            "mu_strategy": "adaptive",
+        },
+    }
+    solver_id = next(_SOLVER_IDS)
+    stage1 = ca.nlpsol(
+        f"pcbf_stage1_{solver_id}",
+        "ipopt",
+        {"x": decision, "p": parameters, "f": primary_objective, "g": common_constraints},
+        solver_options,
+    )
+
+    value_limit = ca.MX.sym("value_limit")
+    stage2_constraints = ca.vertcat(common_constraints, primary_objective - value_limit)
+    stage2_options = {
+        **solver_options,
+        "ipopt": {
+            **solver_options["ipopt"],
+            "warm_start_init_point": "yes",
+            "warm_start_bound_push": 1e-8,
+            "warm_start_mult_bound_push": 1e-8,
+            "mu_init": 1e-6,
+        },
+    }
+    stage2 = ca.nlpsol(
+        f"pcbf_stage2_{solver_id}",
+        "ipopt",
+        {
+            "x": decision,
+            "p": ca.vertcat(parameters, value_limit),
+            "f": tracking_objective,
+            "g": stage2_constraints,
+        },
+        stage2_options,
+    )
+    return _SolverBundle(
+        stage1=stage1,
+        stage2=stage2,
+        lbg_stage1=np.asarray(lower, dtype=np.float64),
+        ubg_stage1=np.asarray(upper, dtype=np.float64),
+        lbg_stage2=np.asarray([*lower, -np.inf], dtype=np.float64),
+        ubg_stage2=np.asarray([*upper, 0.0], dtype=np.float64),
+        n_controls=controls_per_step * horizon,
+        n_variables=controls_per_step * horizon + horizon,
+        n_parameters=n_parameters,
+    )
+
+
+def _project_sum_to_box(
+    values: np.ndarray, target_sum: float, lower: float, upper: float
+) -> np.ndarray:
+    projected = np.clip(np.asarray(values, dtype=np.float64), lower, upper)
+    target = float(np.clip(target_sum, len(projected) * lower, len(projected) * upper))
+    for _ in range(2 * len(projected) + 4):
+        deficit = target - float(np.sum(projected))
+        if abs(deficit) <= 1e-10:
+            break
+        free = np.flatnonzero(
+            projected < upper - 1e-12 if deficit > 0.0 else projected > lower + 1e-12
+        )
+        if free.size == 0:
+            break
+        projected[free] += deficit / free.size
+        projected = np.clip(projected, lower, upper)
+    return projected
+
+
+def _enforce_terminal_stop(
+    plan: np.ndarray,
+    *,
+    velocities: dict[int, np.ndarray],
+    drone_ids: list[int],
+    fixed_accelerations: dict[int, np.ndarray],
+    config: PCBFConfig,
+) -> np.ndarray:
+    output = np.asarray(plan, dtype=np.float64).copy()
+    control_scale = config.control_scale_s or config.dt
+    for agent_index, drone in enumerate(drone_ids):
+        if drone in fixed_accelerations:
+            output[:, agent_index] = fixed_accelerations[drone]
+            continue
+        for component in range(2):
+            output[:, agent_index, component] = _project_sum_to_box(
+                output[:, agent_index, component],
+                -float(velocities[drone][component]) / control_scale,
+                -config.a_max,
+                config.a_max,
+            )
+    return output
+
+
+def _initial_plans(
+    *,
+    nominal: np.ndarray,
+    positions: dict[int, np.ndarray],
+    velocities: dict[int, np.ndarray],
+    drone_ids: list[int],
+    pairs: tuple[tuple[int, int], ...],
+    fixed_accelerations: dict[int, np.ndarray],
+    config: PCBFConfig,
+) -> list[np.ndarray]:
+    repeated_nominal = np.repeat(nominal[None, :, :], config.horizon, axis=0)
+    plans = [
+        _enforce_terminal_stop(
+            repeated_nominal,
+            velocities=velocities,
+            drone_ids=drone_ids,
+            fixed_accelerations=fixed_accelerations,
+            config=config,
+        )
+    ]
+    if config.multistart_count > 1 and pairs:
+        first, second = pairs[0]
+        relative = positions[first] - positions[second]
+        norm = float(np.linalg.norm(relative))
+        radial = relative / norm if norm > 1e-9 else np.array([1.0, 0.0])
+        tangent = np.array([-radial[1], radial[0]], dtype=np.float64)
+        index = {drone: agent_index for agent_index, drone in enumerate(drone_ids)}
+        split = max(1, config.horizon // 2)
+        shape = np.ones(config.horizon, dtype=np.float64)
+        shape[split:] = -split / max(1, config.horizon - split)
+        for sign in (1.0, -1.0):
+            plan = repeated_nominal.copy()
+            pulse = sign * 0.75 * config.a_max * shape[:, None] * tangent[None, :]
+            if first not in fixed_accelerations:
+                plan[:, index[first]] += pulse
+            if second not in fixed_accelerations:
+                plan[:, index[second]] -= pulse
+            plans.append(
+                _enforce_terminal_stop(
+                    plan,
+                    velocities=velocities,
+                    drone_ids=drone_ids,
+                    fixed_accelerations=fixed_accelerations,
+                    config=config,
+                )
+            )
+    if config.multistart_count > 3:
+        plans.append(
+            _enforce_terminal_stop(
+                np.zeros_like(repeated_nominal),
+                velocities=velocities,
+                drone_ids=drone_ids,
+                fixed_accelerations=fixed_accelerations,
+                config=config,
+            )
+        )
+    unique: list[np.ndarray] = []
+    for plan in plans:
+        if not any(np.allclose(plan, existing, atol=1e-12, rtol=0.0) for existing in unique):
+            unique.append(plan)
+        if len(unique) >= config.multistart_count:
+            break
+    return unique
+
+
+def _shift_warm_start(
+    plan: np.ndarray,
+    *,
+    velocities: dict[int, np.ndarray],
+    drone_ids: list[int],
+    fixed_accelerations: dict[int, np.ndarray],
+    config: PCBFConfig,
+) -> np.ndarray:
+    warm = np.asarray(plan, dtype=np.float64)
+    expected_shape = (config.horizon, len(drone_ids), 2)
+    if warm.shape != expected_shape or not np.all(np.isfinite(warm)):
+        raise ValueError(
+            f"PCBF warm-start plan must be finite with shape {expected_shape}"
+        )
+    shifted = np.empty_like(warm)
+    shifted[:-1] = warm[1:]
+    shifted[-1] = 0.0
+    return _enforce_terminal_stop(
+        shifted,
+        velocities=velocities,
+        drone_ids=drone_ids,
+        fixed_accelerations=fixed_accelerations,
+        config=config,
+    )
+
+
+def _pack_decision(plan: np.ndarray, slacks: np.ndarray) -> np.ndarray:
+    controls = np.asarray(plan, dtype=np.float64).reshape(plan.shape[0], -1).T
+    return np.concatenate([
+        controls.reshape(-1, order="F"), np.asarray(slacks, dtype=np.float64)
+    ])
+
+
+def _unpack_decision(
+    decision: np.ndarray, *, horizon: int, drone_count: int
+) -> tuple[np.ndarray, np.ndarray]:
+    n_controls = horizon * drone_count * 2
+    controls = decision[:n_controls].reshape((2 * drone_count, horizon), order="F")
+    return (
+        controls.T.reshape((horizon, drone_count, 2)),
+        decision[n_controls:],
+    )
+
+
+def _initial_slacks(
+    plan: np.ndarray,
     *,
     positions: dict[int, np.ndarray],
     velocities: dict[int, np.ndarray],
     safe_distances: dict[tuple[int, int], float],
-    directions: dict[tuple[int, int], np.ndarray],
     drone_ids: list[int],
     config: PCBFConfig,
-) -> list[tuple[np.ndarray, float]]:
-    """Build terminal constraints ``c^T plan >= b``."""
-    n_controls = config.horizon * len(drone_ids) * 2
-    index = {drone: idx for idx, drone in enumerate(drone_ids)}
-    constraints: list[tuple[np.ndarray, float]] = []
-    for (i, j), distance in sorted(safe_distances.items()):
-        direction = directions[(i, j)]
-        c = np.zeros(n_controls, dtype=np.float64)
-        for control_step in range(config.horizon):
-            coefficient = _control_coefficient(
-                config.horizon, control_step, config.dt,
-                config.control_scale_s or config.dt,
-            )
-            offset_i = (control_step * len(drone_ids) + index[i]) * 2
-            offset_j = (control_step * len(drone_ids) + index[j]) * 2
-            c[offset_i : offset_i + 2] = coefficient * direction
-            c[offset_j : offset_j + 2] = -coefficient * direction
-        initial_projection = float(direction @ (positions[i] - positions[j]))
-        drift_projection = config.horizon * config.dt * float(direction @ (velocities[i] - velocities[j]))
-        constraints.append((c, distance + config.terminal_buffer_m - initial_projection - drift_projection))
-        # A non-closing terminal projected relative velocity is invariant under
-        # the zero-acceleration local controller: n^T r cannot subsequently
-        # decrease.  Unlike forcing every vehicle to hover, this invariant
-        # set permits mission progress before the terminal backup is needed.
-        c = np.zeros(n_controls, dtype=np.float64)
-        for control_step in range(config.horizon):
-            offset_i = (control_step * len(drone_ids) + index[i]) * 2
-            offset_j = (control_step * len(drone_ids) + index[j]) * 2
-            c[offset_i : offset_i + 2] = config.control_scale_s or config.dt
-            c[offset_j : offset_j + 2] = -(config.control_scale_s or config.dt)
-            c[offset_i : offset_i + 2] *= direction
-            c[offset_j : offset_j + 2] *= direction
-        terminal_relative_velocity = float(direction @ (velocities[i] - velocities[j]))
-        constraints.append((c, -terminal_relative_velocity - config.terminal_velocity_tolerance_mps))
-    return constraints
+) -> np.ndarray:
+    predicted_p, _ = _predict(
+        plan,
+        positions=positions,
+        velocities=velocities,
+        drone_ids=drone_ids,
+        config=config,
+    )
+    slacks = np.zeros(config.horizon, dtype=np.float64)
+    for step in range(config.horizon):
+        violations = [
+            distance * distance
+            - float(np.dot(
+                predicted_p[first][step] - predicted_p[second][step],
+                predicted_p[first][step] - predicted_p[second][step],
+            ))
+            for (first, second), distance in safe_distances.items()
+        ]
+        slacks[step] = max(0.0, *violations)
+    return slacks
 
 
-def _project_halfspace(x: np.ndarray, c: np.ndarray, b: float) -> np.ndarray:
-    deficit = b - float(c @ x)
-    norm_sq = float(c @ c)
-    if deficit > 0.0 and norm_sq > 1e-14:
-        return x + (deficit / norm_sq) * c
-    return x
+def _variable_bounds(
+    *,
+    bundle: _SolverBundle,
+    drone_ids: list[int],
+    fixed_accelerations: dict[int, np.ndarray],
+    config: PCBFConfig,
+) -> tuple[np.ndarray, np.ndarray]:
+    lower = np.full(bundle.n_variables, -np.inf, dtype=np.float64)
+    upper = np.full(bundle.n_variables, np.inf, dtype=np.float64)
+    controls_per_step = 2 * len(drone_ids)
+    for step in range(config.horizon):
+        for agent_index, drone in enumerate(drone_ids):
+            for component in range(2):
+                flat_index = step * controls_per_step + 2 * agent_index + component
+                if drone in fixed_accelerations:
+                    value = float(fixed_accelerations[drone][component])
+                    lower[flat_index] = value
+                    upper[flat_index] = value
+                else:
+                    lower[flat_index] = -config.a_max
+                    upper[flat_index] = config.a_max
+    lower[bundle.n_controls :] = 0.0
+    return lower, upper
 
 
-def _project_terminal_and_box(
+def _max_bound_violation(
+    values: np.ndarray, lower: np.ndarray, upper: np.ndarray
+) -> float:
+    lower_violation = np.where(np.isfinite(lower), lower - values, 0.0)
+    upper_violation = np.where(np.isfinite(upper), values - upper, 0.0)
+    return float(max(0.0, np.max(lower_violation), np.max(upper_violation)))
+
+
+def _run_solver(
+    solver: Any,
+    *,
+    initial: np.ndarray,
+    parameters: np.ndarray,
+    lower_variables: np.ndarray,
+    upper_variables: np.ndarray,
+    lower_constraints: np.ndarray,
+    upper_constraints: np.ndarray,
+    acceptable_tolerance: float,
+    initial_lam_x: np.ndarray | None = None,
+    initial_lam_g: np.ndarray | None = None,
+) -> _SolveAttempt:
+    try:
+        arguments: dict[str, Any] = {
+            "x0": initial,
+            "p": parameters,
+            "lbx": lower_variables,
+            "ubx": upper_variables,
+            "lbg": lower_constraints,
+            "ubg": upper_constraints,
+        }
+        if initial_lam_x is not None:
+            arguments["lam_x0"] = initial_lam_x
+        if initial_lam_g is not None:
+            arguments["lam_g0"] = initial_lam_g
+        result = solver(
+            **arguments,
+        )
+        decision = np.asarray(result["x"], dtype=np.float64).reshape(-1)
+        constraint_values = np.asarray(result["g"], dtype=np.float64).reshape(-1)
+        stats = solver.stats()
+        max_violation = max(
+            _max_bound_violation(decision, lower_variables, upper_variables),
+            _max_bound_violation(
+                constraint_values, lower_constraints, upper_constraints
+            ),
+        )
+        success = bool(stats.get("success", False))
+        success = success and bool(np.all(np.isfinite(decision)))
+        success = success and max_violation <= 10.0 * acceptable_tolerance
+        return _SolveAttempt(
+            decision=decision,
+            objective=float(result["f"]),
+            iterations=int(stats.get("iter_count", 0)),
+            status=str(stats.get("return_status", "unknown")),
+            success=success,
+            max_violation=max_violation,
+            lam_x=np.asarray(result["lam_x"], dtype=np.float64).reshape(-1),
+            lam_g=np.asarray(result["lam_g"], dtype=np.float64).reshape(-1),
+        )
+    except Exception as exc:  # CasADi plugin failures must fail closed.
+        return _SolveAttempt(
+            decision=np.asarray(initial, dtype=np.float64),
+            objective=float("inf"),
+            iterations=0,
+            status=f"exception:{type(exc).__name__}",
+            success=False,
+            max_violation=float("inf"),
+            lam_x=None,
+            lam_g=None,
+        )
+
+
+def _terminal_is_feasible(
     plan: np.ndarray,
     *,
-    terminal_constraints: list[tuple[np.ndarray, float]],
+    positions: dict[int, np.ndarray],
+    velocities: dict[int, np.ndarray],
+    safe_distances: dict[tuple[int, int], float],
+    drone_ids: list[int],
     config: PCBFConfig,
-) -> tuple[np.ndarray, bool]:
-    """Dykstra projection onto terminal halfspaces and the acceleration box."""
-    flat = plan.reshape(-1).copy()
-    corrections = [np.zeros_like(flat) for _ in range(len(terminal_constraints) + 1)]
-    for _ in range(config.projection_iterations):
-        previous = flat.copy()
-        previous_corrections = [correction.copy() for correction in corrections]
-        current = flat
-        shifted = current + corrections[0]
-        projected = np.clip(shifted, -config.a_max, config.a_max)
-        corrections[0] = shifted - projected
-        current = projected
-        for index, (c, b) in enumerate(terminal_constraints, start=1):
-            shifted = current + corrections[index]
-            projected = _project_halfspace(shifted, c, b)
-            corrections[index] = shifted - projected
-            current = projected
-        flat = current
-        primal_change = float(np.linalg.norm(flat - previous))
-        correction_change = max(
-            float(np.linalg.norm(correction - old))
-            for correction, old in zip(corrections, previous_corrections)
+) -> bool:
+    predicted_p, predicted_v = _predict(
+        plan,
+        positions=positions,
+        velocities=velocities,
+        drone_ids=drone_ids,
+        config=config,
+    )
+    tolerance = 10.0 * config.acceptable_tolerance
+    for drone in drone_ids:
+        if np.max(np.abs(predicted_p[drone][-1])) > config.position_bound_m + tolerance:
+            return False
+        if np.max(np.abs(predicted_v[drone][-1])) > config.velocity_bound_mps + tolerance:
+            return False
+        if (
+            np.max(np.abs(predicted_v[drone][-1]))
+            > config.terminal_velocity_tolerance_mps + tolerance
+        ):
+            return False
+    for (first, second), distance in safe_distances.items():
+        terminal_distance = float(
+            np.linalg.norm(predicted_p[first][-1] - predicted_p[second][-1])
         )
-        if primal_change <= config.tolerance and correction_change <= config.tolerance:
-            break
-    feasible = bool(np.all(np.abs(flat) <= config.a_max + config.tolerance))
-    feasible = feasible and all(float(c @ flat) >= b - config.tolerance for c, b in terminal_constraints)
-    return flat.reshape(plan.shape), feasible
+        if terminal_distance + tolerance < distance + config.terminal_buffer_m:
+            return False
+    return True
 
 
 def solve_pcbf(
@@ -314,128 +689,270 @@ def solve_pcbf(
     velocities: dict[int, np.ndarray],
     safe_distances: dict[tuple[int, int], float],
     config: PCBFConfig,
+    fixed_accelerations: dict[int, np.ndarray] | None = None,
+    warm_start_plan: np.ndarray | None = None,
 ) -> PCBFResult:
-    """Solve the frozen-form PCBF safe MPC problem for a centralized fleet.
-
-    ``safe_distances`` must be evaluated before the solve and held constant
-    across this horizon. This is the precise Gate 0 mapping of the paper's
-    time-invariant ``X``; live dynamic-boundary adaptation is intentionally a
-    later, explicitly labeled integration step.
-    """
+    """Solve Huang's PCBF and then select the closest first nominal input."""
     drone_ids = sorted(positions)
     if set(drone_ids) != set(velocities) or set(drone_ids) != set(nominal_accelerations):
         raise ValueError("PCBF positions, velocities and nominal accelerations must share drone ids")
     if len(drone_ids) < 2:
         raise ValueError("PCBF requires at least two drones")
-    directions: dict[tuple[int, int], np.ndarray] = {}
-    for i, j in safe_distances:
-        if i not in positions or j not in positions:
-            raise ValueError("PCBF safe-distance pair contains an unknown drone")
-        relative = np.asarray(positions[i], dtype=np.float64) - np.asarray(positions[j], dtype=np.float64)
-        norm = float(np.linalg.norm(relative))
-        if norm <= 1e-9:
-            return PCBFResult(
-                accelerations=_brake(velocities, config.a_max), feasible=False,
-                terminal_feasible=False, value=float("inf"), slack_sum=float("inf"),
-                iterations=0, status="fail_closed", fail_closed_reason="coincident_pair", plan=None,
-            )
-        directions[(i, j)] = relative / norm
-    normalized_positions = {i: np.asarray(positions[i], dtype=np.float64) for i in drone_ids}
-    normalized_velocities = {i: np.asarray(velocities[i], dtype=np.float64) for i in drone_ids}
-    nominal = np.stack([np.asarray(nominal_accelerations[i], dtype=np.float64) for i in drone_ids])
+
+    normalized_positions = {
+        drone: np.asarray(positions[drone], dtype=np.float64) for drone in drone_ids
+    }
+    normalized_velocities = {
+        drone: np.asarray(velocities[drone], dtype=np.float64) for drone in drone_ids
+    }
+    nominal = np.stack([
+        np.asarray(nominal_accelerations[drone], dtype=np.float64)
+        for drone in drone_ids
+    ])
     if nominal.shape != (len(drone_ids), 2):
         raise ValueError("PCBF nominal accelerations must be planar vectors")
-    return _solve_candidate_pcbf(
-        nominal=np.clip(nominal, -config.a_max, config.a_max),
-        positions=normalized_positions,
-        velocities=normalized_velocities,
-        safe_distances=safe_distances,
+    state_values = [*normalized_positions.values(), *normalized_velocities.values()]
+    if any(
+        value.shape != (2,) or not np.all(np.isfinite(value)) for value in state_values
+    ) or not np.all(np.isfinite(nominal)):
+        raise ValueError("PCBF state and nominal inputs must be finite planar vectors")
+    nominal = np.clip(nominal, -config.a_max, config.a_max)
+
+    fixed = {
+        drone: np.asarray(value, dtype=np.float64)
+        for drone, value in (fixed_accelerations or {}).items()
+    }
+    unknown = set(fixed) - set(drone_ids)
+    if unknown:
+        raise ValueError(f"fixed acceleration contains unknown drones: {sorted(unknown)}")
+    if any(value.shape != (2,) or not np.all(np.isfinite(value)) for value in fixed.values()):
+        raise ValueError("fixed accelerations must be finite planar vectors")
+    if any(np.linalg.norm(acceleration) > 1e-12 for acceleration in fixed.values()):
+        # A permanently fixed nonzero acceleration has no compact invariant
+        # terminal set under the bounded position/velocity model. Preserve the
+        # revoked input and fail closed instead of claiming PCBF feasibility.
+        return PCBFResult(
+            accelerations=_brake(normalized_velocities, config.a_max, fixed),
+            feasible=False,
+            terminal_feasible=False,
+            value=float("inf"),
+            slack_sum=float("inf"),
+            iterations=0,
+            status="fail_closed",
+            fail_closed_reason="fixed_input_has_no_invariant_terminal_policy",
+            plan=None,
+            stage1_status="not_started",
+        )
+    for drone, acceleration in fixed.items():
+        nominal[drone_ids.index(drone)] = acceleration
+
+    normalized_distances: dict[tuple[int, int], float] = {}
+    for (first, second), raw_distance in safe_distances.items():
+        if first == second or first not in positions or second not in positions:
+            raise ValueError("PCBF safe-distance pair is invalid")
+        pair = tuple(sorted((first, second)))
+        if pair in normalized_distances:
+            raise ValueError("PCBF safe-distance pairs must be unique")
+        distance = float(raw_distance)
+        if not np.isfinite(distance) or distance <= 0.0:
+            raise ValueError("PCBF safe distances must be positive and finite")
+        normalized_distances[pair] = distance
+    if not normalized_distances:
+        raise ValueError("PCBF requires at least one safety constraint")
+
+    pairs = tuple(sorted(normalized_distances))
+    index = {drone: agent_index for agent_index, drone in enumerate(drone_ids)}
+    pair_indices = tuple((index[first], index[second]) for first, second in pairs)
+    bundle = _build_solver_bundle(
+        horizon=config.horizon,
+        drone_count=len(drone_ids),
+        pair_indices=pair_indices,
+        dt=config.dt,
+        control_scale=config.control_scale_s or config.dt,
+        terminal_buffer=config.terminal_buffer_m,
+        terminal_velocity_tolerance=config.terminal_velocity_tolerance_mps,
+        position_bound=config.position_bound_m,
+        velocity_bound=config.velocity_bound_mps,
+        max_iterations=config.max_iterations,
+        tolerance=config.tolerance,
+        acceptable_tolerance=config.acceptable_tolerance,
+    )
+
+    parameter_values = np.concatenate([
+        *(normalized_positions[drone] for drone in drone_ids),
+        *(normalized_velocities[drone] for drone in drone_ids),
+        np.asarray([normalized_distances[pair] for pair in pairs]),
+        nominal.reshape(-1),
+    ]).astype(np.float64)
+    if parameter_values.size != bundle.n_parameters:
+        raise RuntimeError("internal PCBF parameter layout mismatch")
+    lower_variables, upper_variables = _variable_bounds(
+        bundle=bundle,
         drone_ids=drone_ids,
+        fixed_accelerations=fixed,
         config=config,
     )
 
-    # Retained below as the Gate-0 projected-subgradient reference
-    # implementation. The C1 PX4 comparison uses the bounded candidate solver.
-    plan = np.repeat(np.clip(nominal, -config.a_max, config.a_max)[None, :, :], config.horizon, axis=0)
-    terminal_constraints = _terminal_halfspaces(
-        positions=normalized_positions, velocities=normalized_velocities,
-        safe_distances=safe_distances, directions=directions, drone_ids=drone_ids, config=config,
-    )
-    plan, terminal_feasible = _project_terminal_and_box(plan, terminal_constraints=terminal_constraints, config=config)
-    if not terminal_feasible:
-        return PCBFResult(
-            accelerations=_brake(normalized_velocities, config.a_max), feasible=False,
-            terminal_feasible=False, value=float("inf"), slack_sum=float("inf"),
-            iterations=0, status="fail_closed", fail_closed_reason="terminal_infeasible", plan=None,
+    def run_stage1(initial_plan: np.ndarray) -> _SolveAttempt:
+        initial_slacks = _initial_slacks(
+            initial_plan,
+            positions=normalized_positions,
+            velocities=normalized_velocities,
+            safe_distances=normalized_distances,
+            drone_ids=drone_ids,
+            config=config,
+        )
+        return _run_solver(
+            bundle.stage1,
+            initial=_pack_decision(initial_plan, initial_slacks),
+            parameters=parameter_values,
+            lower_variables=lower_variables,
+            upper_variables=upper_variables,
+            lower_constraints=bundle.lbg_stage1,
+            upper_constraints=bundle.ubg_stage1,
+            acceptable_tolerance=config.acceptable_tolerance,
         )
 
-    index = {drone: idx for idx, drone in enumerate(drone_ids)}
-    # The common interface supplies acceleration intent rather than an MPC
-    # task cost.  Its one-command velocity image is the deterministic reference
-    # used by this mission-tracking adaptation; it contains no AegisAir state.
-    velocity_references = {
-        drone: normalized_velocities[drone]
-        + (config.control_scale_s or config.dt) * nominal[index[drone]]
-        for drone in drone_ids
-    }
-    slack_sum = float("inf")
-    for iteration in range(1, config.iterations + 1):
-        predicted_p, predicted_v = _predict(plan, positions=normalized_positions, velocities=normalized_velocities, drone_ids=drone_ids, config=config)
-        gradient = 2.0 * config.tracking_weight * (plan - nominal[None, :, :])
-        for drone in drone_ids:
-            agent_index = index[drone]
-            for step in range(1, config.horizon + 1):
-                velocity_error = predicted_v[drone][step] - velocity_references[drone]
-                for control_step in range(step):
-                    gradient[control_step, agent_index] += (
-                        2.0 * config.velocity_tracking_weight
-                        * (config.control_scale_s or config.dt)
-                        * velocity_error
-                    )
-        slack_sum = 0.0
-        for (i, j), distance in safe_distances.items():
-            direction = directions[(i, j)]
-            for step in range(1, config.horizon):
-                deficit = distance - float(direction @ (predicted_p[i][step] - predicted_p[j][step]))
-                if deficit <= 0.0:
-                    continue
-                slack_sum += deficit
-                for control_step in range(step):
-                    coefficient = _control_coefficient(
-                        step, control_step, config.dt,
-                        config.control_scale_s or config.dt,
-                    )
-                    gradient[control_step, index[i]] -= config.slack_weight * coefficient * direction
-                    gradient[control_step, index[j]] += config.slack_weight * coefficient * direction
-        next_plan = plan - config.step_size * gradient
-        next_plan, terminal_feasible = _project_terminal_and_box(next_plan, terminal_constraints=terminal_constraints, config=config)
-        if not terminal_feasible:
-            return PCBFResult(
-                accelerations=_brake(normalized_velocities, config.a_max), feasible=False,
-                terminal_feasible=False, value=float("inf"), slack_sum=float("inf"),
-                iterations=iteration, status="fail_closed", fail_closed_reason="terminal_projection_failed", plan=None,
+    stage1_attempts: list[_SolveAttempt] = []
+    warm_start_used = False
+    if warm_start_plan is not None:
+        warm_attempt = run_stage1(
+            _shift_warm_start(
+                warm_start_plan,
+                velocities=normalized_velocities,
+                drone_ids=drone_ids,
+                fixed_accelerations=fixed,
+                config=config,
             )
-        if float(np.linalg.norm(next_plan - plan)) <= config.tolerance:
-            plan = next_plan
-            break
-        plan = next_plan
-    predicted_p, _ = _predict(plan, positions=normalized_positions, velocities=normalized_velocities, drone_ids=drone_ids, config=config)
-    slack_sum = sum(
-        max(0.0, distance - float(directions[(i, j)] @ (predicted_p[i][step] - predicted_p[j][step])))
-        for (i, j), distance in safe_distances.items()
-        for step in range(1, config.horizon)
+        )
+        stage1_attempts.append(warm_attempt)
+        warm_start_used = warm_attempt.success
+
+    if not warm_start_used:
+        for initial_plan in _initial_plans(
+            nominal=nominal,
+            positions=normalized_positions,
+            velocities=normalized_velocities,
+            drone_ids=drone_ids,
+            pairs=pairs,
+            fixed_accelerations=fixed,
+            config=config,
+        ):
+            attempt = run_stage1(initial_plan)
+            stage1_attempts.append(attempt)
+            if attempt.success and attempt.objective <= config.acceptable_tolerance:
+                break
+
+    successful_stage1 = [attempt for attempt in stage1_attempts if attempt.success]
+    total_iterations = sum(attempt.iterations for attempt in stage1_attempts)
+    if not successful_stage1:
+        return PCBFResult(
+            accelerations=_brake(normalized_velocities, config.a_max, fixed),
+            feasible=False,
+            terminal_feasible=False,
+            value=float("inf"),
+            slack_sum=float("inf"),
+            iterations=total_iterations,
+            status="fail_closed",
+            fail_closed_reason="stage1_infeasible_or_failed",
+            plan=None,
+            stage1_status=(stage1_attempts[-1].status if stage1_attempts else "not_started"),
+            max_constraint_violation=min(
+                (attempt.max_violation for attempt in stage1_attempts),
+                default=float("inf"),
+            ),
+            warm_start_used=False,
+        )
+
+    primary = min(
+        successful_stage1,
+        key=lambda attempt: (attempt.objective, attempt.max_violation),
     )
-    velocity_error_cost = sum(
-        float(np.sum((predicted_v[drone][1:] - velocity_references[drone]) ** 2))
-        for drone in drone_ids
+    value_limit = max(0.0, primary.objective) + config.lexicographic_tolerance
+    stage2 = _run_solver(
+        bundle.stage2,
+        initial=primary.decision,
+        parameters=np.concatenate([parameter_values, [value_limit]]),
+        lower_variables=lower_variables,
+        upper_variables=upper_variables,
+        lower_constraints=bundle.lbg_stage2,
+        upper_constraints=bundle.ubg_stage2,
+        acceptable_tolerance=config.acceptable_tolerance,
+        initial_lam_x=primary.lam_x,
+        initial_lam_g=(
+            np.concatenate([primary.lam_g, [0.0]])
+            if primary.lam_g is not None
+            else None
+        ),
     )
-    value = (
-        config.slack_weight * slack_sum
-        + config.tracking_weight * float(np.sum((plan - nominal[None, :, :]) ** 2))
-        + config.velocity_tracking_weight * velocity_error_cost
+    total_iterations += stage2.iterations
+    stage2_slack_sum = float("inf")
+    if stage2.success:
+        _, stage2_slacks = _unpack_decision(
+            stage2.decision,
+            horizon=config.horizon,
+            drone_count=len(drone_ids),
+        )
+        stage2_slack_sum = float(np.sum(stage2_slacks))
+    value_preservation_tolerance = max(
+        10.0 * config.tolerance,
+        config.lexicographic_tolerance,
     )
+    tie_break_applied = bool(
+        stage2.success
+        and stage2_slack_sum <= value_limit + value_preservation_tolerance
+    )
+    selected = stage2 if tie_break_applied else primary
+
+    plan, slacks = _unpack_decision(
+        selected.decision,
+        horizon=config.horizon,
+        drone_count=len(drone_ids),
+    )
+    terminal_feasible = _terminal_is_feasible(
+        plan,
+        positions=normalized_positions,
+        velocities=normalized_velocities,
+        safe_distances=normalized_distances,
+        drone_ids=drone_ids,
+        config=config,
+    )
+    if not terminal_feasible:
+        return PCBFResult(
+            accelerations=_brake(normalized_velocities, config.a_max, fixed),
+            feasible=False,
+            terminal_feasible=False,
+            value=float(primary.objective),
+            slack_sum=float(np.sum(slacks)),
+            iterations=total_iterations,
+            status="fail_closed",
+            fail_closed_reason="terminal_verification_failed",
+            plan=plan,
+            stage1_status=primary.status,
+            stage2_status=stage2.status,
+            max_constraint_violation=selected.max_violation,
+            tie_break_applied=tie_break_applied,
+            warm_start_used=warm_start_used,
+        )
+
+    accelerations = {
+        drone: plan[0, agent_index].copy()
+        for agent_index, drone in enumerate(drone_ids)
+    }
     return PCBFResult(
-        accelerations={drone: plan[0, index[drone]].copy() for drone in drone_ids},
-        feasible=True, terminal_feasible=True, value=float(value), slack_sum=float(slack_sum),
-        iterations=iteration, status="optimal_approx", fail_closed_reason=None, plan=plan,
+        accelerations=accelerations,
+        feasible=True,
+        terminal_feasible=True,
+        value=float(max(0.0, primary.objective)),
+        slack_sum=float(max(0.0, np.sum(slacks))),
+        iterations=total_iterations,
+        status="solved_local",
+        fail_closed_reason=None,
+        plan=plan,
+        stage1_status=primary.status,
+        stage2_status=stage2.status,
+        max_constraint_violation=selected.max_violation,
+        tracking_cost=float(np.sum((plan[0] - nominal) ** 2)),
+        tie_break_applied=tie_break_applied,
+        warm_start_used=warm_start_used,
     )

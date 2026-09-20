@@ -46,8 +46,24 @@ from swarm.estimation import (
 )
 from swarm.ra.margin import normalized_margin
 from swarm.ra.margins import RuntimeAssuranceParams, dynamic_safety_boundary
+from swarm.ra.execution_supervisor import (
+    ExecutionConformanceSupervisor,
+    ExecutionSupervisorConfig,
+    TelemetryFreshnessConfig,
+    TelemetryFreshnessGate,
+    deterministic_backup_velocity,
+)
+from swarm.ra.c1_px4_supervisor import (
+    C1Px4AdmissionSupervisor,
+    C1Px4SupervisorConfig,
+)
 from swarm.ra.runtime_assurance import RuntimeAssurance
+from swarm.interfaces import ExecutionAssuranceDecision
 from swarm.recovery import (
+    C3AdmissionCoordinator,
+    C3GroupSlotCoordinator,
+    C3ReservationCoordinator,
+    C3SpaceTimeReservationCoordinator,
     AsyncMissionReplanner,
     DeterministicRecoveryClient,
     LLMRecoveryClient,
@@ -55,6 +71,7 @@ from swarm.recovery import (
     MlxLmClient,
     RecoveryContext,
     RecoveryOverrides,
+    RecoverabilityAdmissionCoordinator,
     ReplanConfig,
     RuleMissionPlanner,
 )
@@ -83,11 +100,33 @@ class _FaultedLlmClient(LLMRecoveryClient):
 
 CRUISE_ALTITUDE_M = 2.5
 COMMAND_HORIZON_S = 0.5
-COMMAND_TTL_S = 0.5
+COMMAND_TTL_S = 0.15
+NATIVE_COMMAND_TTL_S = 0.5
 NOMINAL_GAIN = 1.5
 ALTITUDE_HOLD_KP = 1.0
 MAX_VERTICAL_SPEED_MPS = 1.0
 RESET_POSITION_TOLERANCE_M = 0.20
+
+
+def _latency_summary_ms(
+    values: list[float], *, deadline_ms: float
+) -> dict[str, float | int] | None:
+    """汇总逐步 RA wall-clock 延迟，不删除慢样本。"""
+    if not values:
+        return None
+    return {
+        "p50": float(np.percentile(values, 50)),
+        "p95": float(np.percentile(values, 95)),
+        "p99": float(np.percentile(values, 99)),
+        "max": max(values),
+        "deadline_ms": deadline_ms,
+        "deadline_misses": sum(value > deadline_ms for value in values),
+    }
+
+
+def _command_authority(*, failed_or_aborted: bool) -> tuple[str, bool]:
+    """标记命令权限路径；当前 live runner 不允许高层绕过 RA。"""
+    return ("failed_zero" if failed_or_aborted else "ra_filtered", False)
 RESET_SPEED_TOLERANCE_MPS = 0.15
 RESET_MAX_SPEED_MPS = 1.0
 RESET_MAX_VERTICAL_SPEED_MPS = 0.5
@@ -229,6 +268,103 @@ def build_phase5_velocity_command(
         "command_id": f"phase5-vel-{drone}-{timestamp_ms}",
         "timestamp_ms": timestamp_ms,
     }
+
+
+def build_phase5_hold_command(
+    *,
+    drone: int,
+    timestamp_ms: int,
+    priority: str = "safety",
+    ttl_sec: float = COMMAND_TTL_S,
+) -> dict[str, Any]:
+    """Request adapter-local position hold without using central stale state."""
+    return {
+        "drone": drone,
+        "action": "hold",
+        "source_frame": "FLU",
+        "ttl_sec": ttl_sec,
+        "priority": priority,
+        "command_id": f"phase5-hold-{drone}-{timestamp_ms}",
+        "timestamp_ms": timestamp_ms,
+    }
+
+
+def _velocity_for_command_mode(result: object, velocity_command_mode: str) -> np.ndarray:
+    """Map an RA result to the requested horizontal command exactly once."""
+    if velocity_command_mode == "nominal":
+        value = getattr(result, "nominal_action")
+    elif velocity_command_mode in {"safe_action", "feedforward_tau"}:
+        # ``safe_action`` was already formed from the same state and command
+        # scale used by the acceleration QP.  Rebuilding it from raw telemetry
+        # here can silently change the solver-selected joint input.
+        value = getattr(result, "safe_action")
+    else:
+        raise ValueError(f"unknown velocity_command_mode: {velocity_command_mode}")
+    return np.asarray(value, dtype=np.float64)
+
+
+def _audit_published_command(
+    *,
+    solver_selected_velocity: np.ndarray | tuple[float, float],
+    published_command: dict[str, Any],
+    reference_velocity: np.ndarray | tuple[float, float],
+    command_scale_s: float,
+    fallback_reason: str | None,
+) -> dict[str, Any]:
+    """Separate solver feasibility from the command actually sent to PX4."""
+    selected = np.asarray(solver_selected_velocity, dtype=np.float64)
+    published_raw = published_command.get("velocity")
+    published = (
+        np.asarray(published_raw[:2], dtype=np.float64)
+        if published_command.get("action") == "velocity" and published_raw is not None
+        else None
+    )
+    matches = bool(
+        published is not None
+        and np.allclose(published, selected, atol=1e-9, rtol=0.0)
+    )
+    effective_acceleration = None
+    if published is not None and command_scale_s > 0.0:
+        reference = np.asarray(reference_velocity, dtype=np.float64)
+        effective_acceleration = ((published - reference) / command_scale_s).tolist()
+    return {
+        "solver_selected_velocity": selected.tolist(),
+        "published_action": published_command["action"],
+        "published_velocity": published.tolist() if published is not None else None,
+        "published_command_matches_selected": matches,
+        "published_effective_acceleration": effective_acceleration,
+        "fallback_reason": fallback_reason,
+        "command_timestamp_ms": int(published_command["timestamp_ms"]),
+        "command_ttl_s": float(published_command["ttl_sec"]),
+    }
+
+
+def _joint_published_constraint_status(
+    *,
+    command_audits: dict[int, dict[str, Any]],
+    solver_feasible: dict[int, bool | None],
+    solver_velocity_saturated: dict[int, bool],
+) -> bool | None:
+    """Transfer a joint solver claim only when the full command vector matches."""
+    if not all(
+        audit["published_command_matches_selected"]
+        for audit in command_audits.values()
+    ):
+        return None
+    feasibility = list(solver_feasible.values())
+    if any(value is False for value in feasibility):
+        return False
+    if all(value is True for value in feasibility) and not any(
+        solver_velocity_saturated.values()
+    ):
+        return True
+    return None
+
+
+def _joint_solver_feasible(solver_feasible: dict[int, bool | None]) -> bool:
+    return bool(solver_feasible) and all(
+        value is True for value in solver_feasible.values()
+    )
 
 
 def validate_command_path(
@@ -642,6 +778,16 @@ def _priority_order(
     return sorted(drone_ids)
 
 
+def _freeze_holding_points(
+    drone_ids: list[int], positions: dict[int, Any]
+) -> dict[int, tuple[float, float, float]]:
+    """在一次顺序通行开始时冻结等待点，避免目标随当前位置向外漂移。"""
+    return {
+        drone: safe_holding_point(drone, positions)
+        for drone in drone_ids
+    }
+
+
 def _resolve_priority_order(
     client,
     drone_ids: list[int],
@@ -870,6 +1016,7 @@ def run_sim_episode(
     replan_timeout_s: float | None = None,
     immediate_fallback: bool = False,
     pilot: MappoPilot | None = None,
+    c1_px4_supervisor_config: C1Px4SupervisorConfig | None = None,
 ) -> dict[str, Any]:
     if observation_mode not in OBSERVATION_MODES:
         raise ValueError(f"unknown observation_mode: {observation_mode}")
@@ -910,6 +1057,26 @@ def run_sim_episode(
         i: (float(env.goals[i, 0]), float(env.goals[i, 1]), 0.0)
         for i in env.agent_ids
     }
+    c1_px4_supervisor = (
+        C1Px4AdmissionSupervisor(
+            config=c1_px4_supervisor_config,
+            drone_ids=list(env.agent_ids),
+            base_goals=base_goals,
+            reset_starts={
+                i: (
+                    float(env.positions[i, 0]),
+                    float(env.positions[i, 1]),
+                    0.0,
+                )
+                for i in env.agent_ids
+            },
+            rate_hz=1.0 / env.scenario.dt,
+            ra_params=ra.params,
+            v_max=ra.v_max,
+        )
+        if c1_px4_supervisor_config is not None
+        else None
+    )
     overrides = RecoveryOverrides()
     failed: set[int] = set()
     aborted: set[int] = set()
@@ -953,6 +1120,8 @@ def run_sim_episode(
         "idx": 0,
         "best": {i: float("inf") for i in env.agent_ids},
         "stall": {i: 0 for i in env.agent_ids},
+        "holding": {},
+        "completed": set(),
     }
 
     for step in range(max_steps):
@@ -975,13 +1144,20 @@ def run_sim_episode(
                 dist = float(
                     np.linalg.norm(env.positions[i] - np.asarray(base_goals[i][:2]))
                 )
+                if dist < env.scenario.goal_epsilon:
+                    seq_state["completed"].add(i)
+                    seq_state["stall"][i] = 0
+                    continue
                 if dist < seq_state["best"][i] - 0.02:
                     seq_state["best"][i] = dist
                     seq_state["stall"][i] = 0
                 else:
                     seq_state["stall"][i] += 1
-            if not seq_state["active"] and any(
-                v >= 8 for v in seq_state["stall"].values()
+            pending = [
+                i for i in env.agent_ids if i not in seq_state["completed"]
+            ]
+            if not seq_state["active"] and len(pending) > 1 and any(
+                seq_state["stall"][i] >= 8 for i in pending
             ):
                 seq_state["active"] = True
                 seq_state["idx"] = 0
@@ -989,21 +1165,35 @@ def run_sim_episode(
                 seq_state["stall"] = {i: 0 for i in env.agent_ids}
                 seq_state["order"] = _resolve_priority_order(
                     llm_client,
-                    env.agent_ids,
+                    pending,
                     urgent_drone,
                     _snapshots(env),
                     base_goals,
                     int(t * 1000),
                 )
+                seq_state["holding"] = _freeze_holding_points(
+                    pending, {i: env.positions[i].copy() for i in env.agent_ids}
+                )
             if seq_state["active"]:
+                while (
+                    seq_state["idx"] < len(seq_state["order"])
+                    and seq_state["order"][seq_state["idx"]]
+                    in seq_state["completed"]
+                ):
+                    seq_state["idx"] += 1
+                if seq_state["idx"] >= len(seq_state["order"]):
+                    seq_state["active"] = False
+                    for i in env.agent_ids:
+                        overrides.goal_override.pop(i, None)
+                        overrides.velocity_scale[i] = 1.0
+                    continue
                 right_of_way = seq_state["order"][seq_state["idx"]]
-                sim_positions = {i: env.positions[i] for i in env.agent_ids}
                 for i in env.agent_ids:
-                    if i == right_of_way:
+                    if i == right_of_way or i in seq_state["completed"]:
                         overrides.velocity_scale[i] = 1.0
                         overrides.goal_override.pop(i, None)
                         continue
-                    holding = safe_holding_point(i, sim_positions)
+                    holding = seq_state["holding"][i]
                     if (
                         np.linalg.norm(
                             env.positions[i] - np.asarray(holding[:2])
@@ -1022,10 +1212,28 @@ def run_sim_episode(
                     )
                     < env.scenario.goal_epsilon
                 ):
+                    seq_state["completed"].add(right_of_way)
                     seq_state["idx"] += 1
                     if seq_state["idx"] >= len(seq_state["order"]):
                         seq_state["active"] = False
+                        for i in env.agent_ids:
+                            overrides.goal_override.pop(i, None)
+                            overrides.velocity_scale[i] = 1.0
         fresh_snapshots = _snapshots(env)
+        if c1_px4_supervisor is not None:
+            c1_goals, c1_scales = c1_px4_supervisor.directives(
+                step=step,
+                snapshots=fresh_snapshots,
+                goal_epsilon=env.scenario.goal_epsilon,
+            )
+            for i in env.agent_ids:
+                if i in c1_goals:
+                    overrides.goal_override[i] = c1_goals[i]
+                    env.set_goal(i, np.asarray(c1_goals[i][:2]))
+                else:
+                    overrides.goal_override.pop(i, None)
+                    env.set_goal(i, np.asarray(base_goals[i][:2]))
+                overrides.velocity_scale[i] = c1_scales[i]
         snapshots = fresh_snapshots
         pos_sigma = float(fault.get("perception_noise_pos_m") or 0.0)
         vel_sigma = float(fault.get("perception_noise_vel_mps") or 0.0)
@@ -1077,10 +1285,21 @@ def run_sim_episode(
             rng = np.random.default_rng(seed * 1_000_000 + step)
             for i in env.agent_ids:
                 nominal[i] = nominal[i] + rng.normal(0.0, nominal_noise, 2)
+        fixed_actions = {
+            i: np.zeros(2, dtype=np.float64)
+            for i in env.agent_ids
+            if i in failed or i in aborted
+        }
 
         if local_ras is None:
             filter_started = time.perf_counter()
-            results = ra.filter(snapshots, nominal, t=t, aoi=aoi)
+            results = ra.filter(
+                snapshots,
+                nominal,
+                t=t,
+                aoi=aoi,
+                fixed_actions=fixed_actions,
+            )
             filter_elapsed_ms = (time.perf_counter() - filter_started) * 1000.0
             if ra.last_qp_feasible is not None:
                 qp_solve_steps += 1
@@ -1098,13 +1317,19 @@ def run_sim_episode(
                 )
                 filter_started = time.perf_counter()
                 results[i] = local_ras[i].filter(
-                    local_view, nominal, t=t, aoi=local_aoi
+                    local_view,
+                    nominal,
+                    t=t,
+                    aoi=local_aoi,
+                    fixed_actions=fixed_actions,
                 )[i]
                 filter_elapsed_ms = (time.perf_counter() - filter_started) * 1000.0
                 if local_ras[i].last_qp_feasible is not None:
                     qp_solve_steps += 1
                     qp_infeasible_steps += int(not local_ras[i].last_qp_feasible)
                     qp_latency_ms.append(filter_elapsed_ms)
+        if c1_px4_supervisor is not None:
+            c1_px4_supervisor.observe_ra(results)
         cbf_events += sum(1 for r in results.values() if r.intervened)
         if first_recovery_step is not None and any(r.intervened for r in results.values()):
             recovery_ra_veto_steps += 1
@@ -1177,6 +1402,8 @@ def run_sim_episode(
                 rejected_reasons[reason] = rejected_reasons.get(reason, 0) + 1
 
         final = {i: np.asarray(results[i].safe_action) for i in env.agent_ids}
+        if c1_px4_supervisor is not None and c1_px4_supervisor.brake_latched:
+            final = {i: np.zeros(2, dtype=np.float64) for i in env.agent_ids}
         active_agents = [i for i in env.agent_ids if i not in failed and i not in aborted]
         if active_agents and all(np.linalg.norm(final[i]) < 0.05 for i in active_agents):
             waiting_streak += 1
@@ -1223,11 +1450,14 @@ def run_sim_episode(
             for i in env.agent_ids
             if np.linalg.norm(env.positions[i] - env.goals[i]) < env.scenario.goal_epsilon
         }
-        all_done = (
-            critical_reached
-            if critical_goal is not None
-            else all(i in aborted or i in reached_base for i in env.agent_ids)
-        )
+        if c1_px4_supervisor is not None:
+            all_done = c1_px4_supervisor.complete
+        else:
+            all_done = (
+                critical_reached
+                if critical_goal is not None
+                else all(i in aborted or i in reached_base for i in env.agent_ids)
+            )
         if any(i["collided"] for i in infos.values()):
             collision = True
             completion_step = step + 1
@@ -1245,6 +1475,8 @@ def run_sim_episode(
             state = replanner.active.get(critical_drone)
             priority_violation = state is not None and state.goal_override is not None
         replanner.shutdown()
+
+    ra_instances = [ra] if local_ras is None else list(local_ras.values())
 
     return {
         "observation_mode": observation_mode,
@@ -1272,6 +1504,21 @@ def run_sim_episode(
         "rejected_reasons": rejected_reasons,
         "qp_solve_steps": qp_solve_steps,
         "qp_infeasible_steps": qp_infeasible_steps,
+        "hocbf_primary_infeasible_steps": sum(
+            controller.hocbf_primary_infeasible_count for controller in ra_instances
+        ),
+        "hocbf_predictive_infeasible_steps": sum(
+            controller.hocbf_predictive_infeasible_count for controller in ra_instances
+        ),
+        "hocbf_recovery_infeasible_steps": sum(
+            controller.hocbf_recovery_infeasible_count for controller in ra_instances
+        ),
+        "hocbf_recovery_steps": sum(
+            controller.hocbf_recovery_steps for controller in ra_instances
+        ),
+        "hocbf_recovery_entries": sum(
+            controller.hocbf_recovery_entries for controller in ra_instances
+        ),
         "qp_latency_ms": qp_latency_ms,
         "intersample_audit_samples": execution_audit_samples,
         "intersample_records": intersample_records if execution_audit_samples else None,
@@ -1288,6 +1535,11 @@ def run_sim_episode(
         ),
         "recovery_ra_veto_steps": recovery_ra_veto_steps,
         "safety_bypass_count": 0,
+        "c1_px4_supervisor": (
+            c1_px4_supervisor.summary()
+            if c1_px4_supervisor is not None
+            else None
+        ),
         "counters": (
             {
                 "triggers": replanner.counters.triggers,
@@ -1357,13 +1609,65 @@ def run_mqtt_loop(
     tau_px4_max: float | None = None,
     execution_model: str = "exact_zoh",
     sampled_data: bool = False,
+    sampled_data_method: str = "aegis",
+    pcbf_horizon: int = 20,
+    pcbf_terminal_buffer_m: float = 0.10,
+    pcbf_terminal_velocity_tolerance_mps: float = 0.0,
+    pcbf_position_bound_m: float = 20.0,
+    pcbf_velocity_bound_mps: float = 5.0,
+    pcbf_max_iterations: int = 300,
+    pcbf_multistart_count: int = 3,
+    pcbf_tolerance: float = 1e-7,
+    pcbf_acceptable_tolerance: float = 1e-5,
+    pcbf_lexicographic_tolerance: float = 1e-7,
     gamma: float = 0.1,
+    zocbf_delta: float = 0.0,
+    pb_alpha: float = 2.0,
+    pb_braking_accel: float | None = None,
+    constraint_boundary: str = "full",
+    hocbf_boundary_guard: float = 0.0,
+    hocbf_boundary_buffer_m: float = 0.0,
+    hocbf_infeasible_fallback: str = "velocity_cancel",
+    hocbf_pb_recovery: bool = False,
+    hocbf_predictive_recovery: bool = True,
+    hocbf_prediction_execution_fraction: float = 0.0,
+    hocbf_prediction_steps: int = 1,
+    hocbf_recovery_reserve_threshold: float | None = None,
+    hocbf_recovery_alpha: float = 0.5,
+    hocbf_recovery_braking_accel: float | None = None,
+    hocbf_recovery_boundary_buffer_m: float = 0.0,
+    hocbf_recovery_clear_steps: int = 5,
+    sampled_data_boundary_buffer_m: float = 0.0,
+    sampled_data_infeasible_fallback: str = "velocity_cancel",
+    ra_command_feedforward_tau_s: float | None = None,
     sequential_pass: bool = False,
     urgent_drone: int | None = None,
     estimator_config: SharedStateEstimatorConfig | None = None,
     estimator_seed: int = 0,
     replan_timeout_s: float | None = None,
     pilot: MappoPilot | None = None,
+    coordination_intent_pilot: MappoPilot | None = None,
+    execution_supervisor_config: ExecutionSupervisorConfig | None = None,
+    freshness_gate_config: TelemetryFreshnessConfig | None = None,
+    land_at_end: bool = True,
+    mission_change: dict | None = None,
+    change_step: int | None = None,
+    failed_drone: int | None = None,
+    blocked_zone: tuple[float, float, float, float] | None = None,
+    critical_goal: tuple[float, float] | None = None,
+    goal_epsilon: float = 0.5,
+    velocity_command_mode: str = "safe_action",
+    tau_command_s: float = 0.7,
+    command_hold_jitter_probability: float = 0.0,
+    command_hold_jitter_seed: int = 0,
+    observation_mode: str = OBSERVATION_LEGACY_ASYMMETRIC,
+    ra_params: RuntimeAssuranceParams | None = None,
+    c1_px4_supervisor_config: C1Px4SupervisorConfig | None = None,
+    admission_coordinator: C3AdmissionCoordinator | None = None,
+    reservation_coordinator: C3ReservationCoordinator | None = None,
+    space_time_reservation_coordinator: C3SpaceTimeReservationCoordinator | None = None,
+    group_slot_coordinator: C3GroupSlotCoordinator | None = None,
+    recoverability_admission_coordinator: Any | None = None,
 ) -> dict[str, Any]:
     """Live PX4 loop: arm/takeoff, then RA-filtered closed-loop control.
 
@@ -1376,20 +1680,119 @@ def run_mqtt_loop(
     except ModuleNotFoundError as exc:
         raise SystemExit("paho-mqtt is required for --mqtt mode") from exc
 
-    ra = RuntimeAssurance(
-        params=RuntimeAssuranceParams(tau_ctrl=tau_ctrl),
-        v_max=1.5,
-        use_hocbf=use_hocbf,
-        hocbf_k1=hocbf_k1,
-        hocbf_k2=hocbf_k2,
-        a_max=a_max,
-        kv=kv,
-        tau_px4=tau_px4,
-        tau_px4_min=tau_px4_min,
-        tau_px4_max=tau_px4_max,
-        execution_model=execution_model,
-        sampled_data=sampled_data,
-        gamma=gamma,
+    if observation_mode not in OBSERVATION_MODES:
+        raise ValueError(f"unknown observation_mode: {observation_mode}")
+    if not 0.0 <= command_hold_jitter_probability <= 1.0:
+        raise ValueError("command_hold_jitter_probability must be in [0, 1]")
+    coordination_count = sum(
+        value is not None
+        for value in (
+            admission_coordinator,
+            reservation_coordinator,
+            space_time_reservation_coordinator,
+            group_slot_coordinator,
+        )
+    ) + int(sequential_pass)
+    if coordination_count > 1:
+        raise ValueError(
+            "SEQUENTIAL_PASS、C3-Admission、C3-Reservation、C3-STR 与 C3-GroupSlot 必须独立运行"
+        )
+    active_coordination_coordinator = (
+        admission_coordinator
+        or reservation_coordinator
+        or space_time_reservation_coordinator
+        or group_slot_coordinator
+    )
+    params = ra_params or RuntimeAssuranceParams(tau_ctrl=tau_ctrl)
+
+    def make_ra() -> RuntimeAssurance:
+        return RuntimeAssurance(
+            params=params,
+            v_max=1.5,
+            use_hocbf=use_hocbf,
+            hocbf_k1=hocbf_k1,
+            hocbf_k2=hocbf_k2,
+            a_max=a_max,
+            kv=kv,
+            tau_px4=tau_px4,
+            tau_px4_min=tau_px4_min,
+            tau_px4_max=tau_px4_max,
+            execution_model=execution_model,
+            sampled_data=sampled_data,
+            sampled_data_method=sampled_data_method,
+            pcbf_horizon=pcbf_horizon,
+            pcbf_terminal_buffer_m=pcbf_terminal_buffer_m,
+            pcbf_terminal_velocity_tolerance_mps=pcbf_terminal_velocity_tolerance_mps,
+            pcbf_position_bound_m=pcbf_position_bound_m,
+            pcbf_velocity_bound_mps=pcbf_velocity_bound_mps,
+            pcbf_max_iterations=pcbf_max_iterations,
+            pcbf_multistart_count=pcbf_multistart_count,
+            pcbf_tolerance=pcbf_tolerance,
+            pcbf_acceptable_tolerance=pcbf_acceptable_tolerance,
+            pcbf_lexicographic_tolerance=pcbf_lexicographic_tolerance,
+            gamma=gamma,
+            zocbf_delta=zocbf_delta,
+            pb_alpha=pb_alpha,
+            pb_braking_accel=pb_braking_accel,
+            constraint_boundary=constraint_boundary,
+            hocbf_boundary_guard=hocbf_boundary_guard,
+            hocbf_boundary_buffer_m=hocbf_boundary_buffer_m,
+            hocbf_infeasible_fallback=hocbf_infeasible_fallback,
+            hocbf_pb_recovery=hocbf_pb_recovery,
+            hocbf_predictive_recovery=hocbf_predictive_recovery,
+            hocbf_prediction_execution_fraction=hocbf_prediction_execution_fraction,
+            hocbf_prediction_steps=hocbf_prediction_steps,
+            hocbf_recovery_reserve_threshold=hocbf_recovery_reserve_threshold,
+            hocbf_recovery_alpha=hocbf_recovery_alpha,
+            hocbf_recovery_braking_accel=hocbf_recovery_braking_accel,
+            hocbf_recovery_boundary_buffer_m=hocbf_recovery_boundary_buffer_m,
+            hocbf_recovery_clear_steps=hocbf_recovery_clear_steps,
+            sampled_data_boundary_buffer_m=sampled_data_boundary_buffer_m,
+            sampled_data_infeasible_fallback=sampled_data_infeasible_fallback,
+            command_feedforward_tau_s=ra_command_feedforward_tau_s,
+        )
+
+    ra = make_ra()
+    local_ras = (
+        {drone: make_ra() for drone in drone_ids}
+        if observation_mode == OBSERVATION_LOCAL_FRESH_SELF
+        else None
+    )
+    execution_supervisor = (
+        ExecutionConformanceSupervisor(execution_supervisor_config)
+        if execution_supervisor_config is not None
+        else None
+    )
+    freshness_gate = TelemetryFreshnessGate(freshness_gate_config)
+    if c1_px4_supervisor_config is not None and reset_starts is None:
+        raise ValueError("C1 PX4 supervisor requires reset_starts")
+    if c1_px4_supervisor_config is not None:
+        if not math.isclose(
+            tau_px4, c1_px4_supervisor_config.barrier_tau_px4_s, abs_tol=1e-12
+        ):
+            raise ValueError("C1 barrier_tau_px4_s must match RA tau_px4")
+        if velocity_command_mode != "feedforward_tau":
+            raise ValueError("C1 PX4 supervisor requires feedforward_tau commands")
+        if not math.isclose(
+            tau_command_s,
+            c1_px4_supervisor_config.command_feedforward_tau_s,
+            abs_tol=1e-12,
+        ):
+            raise ValueError(
+                "C1 command_feedforward_tau_s must match tau_command_s"
+            )
+    c1_px4_supervisor = (
+        C1Px4AdmissionSupervisor(
+            config=c1_px4_supervisor_config,
+            drone_ids=drone_ids,
+            base_goals=base_goals,
+            reset_starts=reset_starts or {},
+            rate_hz=rate_hz,
+            ra_params=params,
+            v_max=ra.v_max,
+        )
+        if c1_px4_supervisor_config is not None
+        else None
     )
     replanner = (
         _make_replanner(
@@ -1405,6 +1808,10 @@ def run_mqtt_loop(
         if mode == "ASYNC"
         else None
     )
+    if replanner is not None and recoverability_admission_coordinator is not None:
+        raise ValueError(
+            "immediate replanner 与 recoverability admission 必须作为独立条件运行"
+        )
     overrides = RecoveryOverrides()
     telemetry: dict[int, DroneSnapshot] = {}
     telemetry_health: dict[int, dict[str, bool | int]] = {}
@@ -1426,13 +1833,14 @@ def run_mqtt_loop(
         altitude_m: float | None = None,
         native: bool = False,
         priority: str = "normal",
-    ) -> None:
+    ) -> dict[str, Any]:
+        timestamp_ms = int(time.time_ns() // 1_000_000)
         payload: dict[str, Any] = {
             "drone": drone,
             "action": action,
-            "ttl_sec": COMMAND_TTL_S,
-            "command_id": f"phase5-{action}-{drone}-{int(time.time_ns() // 1_000_000)}",
-            "timestamp_ms": int(time.time_ns() // 1_000_000),
+            "ttl_sec": NATIVE_COMMAND_TTL_S if native else COMMAND_TTL_S,
+            "command_id": f"phase5-{action}-{drone}-{timestamp_ms}",
+            "timestamp_ms": timestamp_ms,
             "source_frame": "PX4_NED" if native else "FLU",
             "priority": priority,
         }
@@ -1444,6 +1852,15 @@ def run_mqtt_loop(
         if altitude_m is not None:
             payload["altitude_m"] = altitude_m
         topic = f"px4/{drone}/command" if native else f"swarm/drone/{drone}/command"
+        client.publish(topic, json.dumps(payload, separators=(",", ":")))
+        return payload
+
+    def publish_payload(payload: dict[str, Any], *, native: bool = False) -> None:
+        topic = (
+            f"px4/{payload['drone']}/command"
+            if native
+            else f"swarm/drone/{payload['drone']}/command"
+        )
         client.publish(topic, json.dumps(payload, separators=(",", ":")))
 
     def on_connect(client, userdata, flags, reason_code, properties=None):
@@ -1583,13 +2000,43 @@ def run_mqtt_loop(
         min_dist: float | None = None
         min_rho: float | None = None
         traj_rows: list[dict[str, Any]] = []
+        failed: set[int] = set()
+        critical_reached = False
+        zone_crossed = False
+        collision = False
+        recovery_step: int | None = None
+        path_length_m = 0.0
+        ra_solve_latency_ms: list[float] = []
+        previous_positions: dict[int, tuple[float, float, float]] = {}
+        # This is an explicit test-side execution perturbation: a selected command
+        # update is held for one control interval.  It never changes the RA state
+        # estimate or controller parameters, and is logged per command.
+        jitter_rng = np.random.default_rng(command_hold_jitter_seed)
+        command_hold_jitter_count = 0
+        safety_bypass_count = 0
+        published_command_mismatch_count = 0
+        published_command_constraint_unknown_count = 0
+        published_command_constraint_failure_count = 0
+        published_constraint_failure_while_solver_feasible_count = 0
+        infrastructure_valid = True
+        infrastructure_invalid_reasons: set[str] = set()
+        previous_issued_velocity = {
+            drone: np.zeros(2, dtype=np.float64) for drone in drone_ids
+        }
         seq_state = {
             "active": False,
             "order": _priority_order(drone_ids, urgent_drone),
             "idx": 0,
             "best": {i: float("inf") for i in drone_ids},
             "stall": {i: 0 for i in drone_ids},
+            "holding": {},
+            "completed": set(),
         }
+        previous_ra_results = None
+        coordination_decision = None
+        reservation_decision = None
+        space_time_reservation_decision = None
+        group_slot_decision = None
         next_deadline = time.monotonic()
         while step < max_steps:
             t = step * period
@@ -1598,6 +2045,45 @@ def run_mqtt_loop(
             if len(snapshots) != len(drone_ids):
                 time.sleep(0.05)
                 continue
+            unhealthy = {
+                i: telemetry_health.get(i, {})
+                for i in drone_ids
+                if telemetry_health.get(i, {}).get("failsafe", False)
+                or telemetry_health.get(i, {}).get("connection_lost", False)
+            }
+            if unhealthy:
+                raise SystemExit(
+                    "PX4 health lost during live episode; trial is invalid: "
+                    f"{unhealthy}"
+                )
+
+            if (
+                change_step is not None
+                and step >= change_step
+                and failed_drone is not None
+            ):
+                failed.add(failed_drone)
+
+            if recoverability_admission_coordinator is not None:
+                overrides = recoverability_admission_coordinator.step(
+                    step=step,
+                    snapshots=snapshots,
+                    base_goals=base_goals,
+                    mission_change=(
+                        mission_change if step == change_step else None
+                    ),
+                )
+                if (
+                    recovery_step is None
+                    and recoverability_admission_coordinator.plans_committed > 0
+                ):
+                    recovery_step = step
+
+            execution_residuals = (
+                execution_supervisor.observe(snapshots, now_t_s=t)
+                if execution_supervisor is not None
+                else {}
+            )
 
             if sequential_pass:
                 for i in drone_ids:
@@ -1607,13 +2093,20 @@ def run_mqtt_loop(
                             - np.asarray(base_goals[i][:2])
                         )
                     )
+                    if dist < goal_epsilon:
+                        seq_state["completed"].add(i)
+                        seq_state["stall"][i] = 0
+                        continue
                     if dist < seq_state["best"][i] - 0.02:
                         seq_state["best"][i] = dist
                         seq_state["stall"][i] = 0
                     else:
                         seq_state["stall"][i] += 1
-                if not seq_state["active"] and any(
-                    v >= 8 for v in seq_state["stall"].values()
+                pending = [
+                    i for i in drone_ids if i not in seq_state["completed"]
+                ]
+                if not seq_state["active"] and len(pending) > 1 and any(
+                    seq_state["stall"][i] >= 8 for i in pending
                 ):
                     seq_state["active"] = True
                     seq_state["idx"] = 0
@@ -1621,23 +2114,36 @@ def run_mqtt_loop(
                     seq_state["stall"] = {i: 0 for i in drone_ids}
                     seq_state["order"] = _resolve_priority_order(
                         llm_client,
-                        drone_ids,
+                        pending,
                         urgent_drone,
                         snapshots,
                         base_goals,
                         timestamp_ms,
                     )
+                    seq_state["holding"] = _freeze_holding_points(
+                        pending,
+                        {i: np.asarray(snapshots[i].position) for i in drone_ids},
+                    )
                 if seq_state["active"]:
+                    while (
+                        seq_state["idx"] < len(seq_state["order"])
+                        and seq_state["order"][seq_state["idx"]]
+                        in seq_state["completed"]
+                    ):
+                        seq_state["idx"] += 1
+                    if seq_state["idx"] >= len(seq_state["order"]):
+                        seq_state["active"] = False
+                        for i in drone_ids:
+                            overrides.goal_override.pop(i, None)
+                            overrides.velocity_scale[i] = 1.0
+                        continue
                     right_of_way = seq_state["order"][seq_state["idx"]]
-                    snap_positions = {
-                        i: snapshots[i].position for i in drone_ids
-                    }
                     for i in drone_ids:
-                        if i == right_of_way:
+                        if i == right_of_way or i in seq_state["completed"]:
                             overrides.velocity_scale[i] = 1.0
                             overrides.goal_override.pop(i, None)
                             continue
-                        holding = safe_holding_point(i, snap_positions)
+                        holding = seq_state["holding"][i]
                         if (
                             np.linalg.norm(
                                 np.asarray(snapshots[i].position[:2])
@@ -1657,9 +2163,78 @@ def run_mqtt_loop(
                         )
                         < 0.5
                     ):
+                        seq_state["completed"].add(right_of_way)
                         seq_state["idx"] += 1
                         if seq_state["idx"] >= len(seq_state["order"]):
                             seq_state["active"] = False
+                            for i in drone_ids:
+                                overrides.goal_override.pop(i, None)
+                                overrides.velocity_scale[i] = 1.0
+
+            if active_coordination_coordinator is not None:
+                intent_snapshots = {
+                    i: replace(snapshots[i], target=base_goals[i]) for i in drone_ids
+                }
+                intent_pilot = coordination_intent_pilot or pilot
+                if intent_pilot is not None:
+                    intent_nominal = intent_pilot.actions(
+                        positions={
+                            i: np.asarray(snapshots[i].position) for i in drone_ids
+                        },
+                        velocities={
+                            i: np.asarray(snapshots[i].velocity or (0.0, 0.0, 0.0))
+                            for i in drone_ids
+                        },
+                        goals={i: np.asarray(base_goals[i][:2]) for i in drone_ids},
+                    )
+                else:
+                    intent_nominal = {
+                        i: np.clip(
+                            NOMINAL_GAIN
+                            * (
+                                np.asarray(base_goals[i][:2])
+                                - np.asarray(snapshots[i].position[:2])
+                            ),
+                            -ra.v_max,
+                            ra.v_max,
+                        )
+                        for i in drone_ids
+                    }
+                directives = active_coordination_coordinator.directives(
+                    step=step,
+                    timestamp_ms=timestamp_ms,
+                    snapshots=intent_snapshots,
+                    nominal=intent_nominal,
+                    previous_results=previous_ra_results,
+                )
+                if group_slot_coordinator is not None:
+                    group_slot_decision = directives.decision
+                    coordination_decision = directives.decision
+                elif space_time_reservation_coordinator is not None:
+                    space_time_reservation_decision = directives.decision
+                elif reservation_coordinator is not None:
+                    reservation_decision = directives.decision
+                else:
+                    coordination_decision = directives.decision
+                for i in drone_ids:
+                    if i in directives.goal_overrides:
+                        overrides.goal_override[i] = directives.goal_overrides[i]
+                    else:
+                        overrides.goal_override.pop(i, None)
+                    overrides.velocity_scale[i] = directives.velocity_scales.get(i, 1.0)
+
+            if c1_px4_supervisor is not None:
+                c1_goals, c1_scales = c1_px4_supervisor.directives(
+                    step=step,
+                    snapshots=snapshots,
+                    goal_epsilon=goal_epsilon,
+                )
+                for i in drone_ids:
+                    if i in c1_goals:
+                        overrides.goal_override[i] = c1_goals[i]
+                    else:
+                        overrides.goal_override.pop(i, None)
+                    overrides.velocity_scale[i] = c1_scales[i]
 
             if pilot is not None:
                 positions = {
@@ -1689,10 +2264,20 @@ def run_mqtt_loop(
                     )
 
             for i in drone_ids:
-                if i in overrides.aborted:
+                if i in overrides.aborted or i in failed:
                     nominal[i] = np.zeros(2)
                     continue
                 nominal[i] = np.asarray(nominal[i], dtype=np.float64) * overrides.velocity_scale.get(i, 1.0)
+            if reservation_coordinator is not None:
+                reservation_coordinator.record_nominal(nominal)
+            if space_time_reservation_coordinator is not None:
+                space_time_reservation_coordinator.record_nominal(nominal)
+
+            fixed_actions = {
+                i: np.zeros(2, dtype=np.float64)
+                for i in drone_ids
+                if i in failed or i in overrides.aborted
+            }
 
             # The CBF boundary grows with the age of the telemetry used for
             # filtering.  Feed the measured round-trip age instead of assuming
@@ -1700,6 +2285,12 @@ def run_mqtt_loop(
             # close faster than the lightweight point-mass simulation.  When
             # the SharedStateEstimator is enabled, RA consumes its delayed,
             # dropout-prone, covariance-bearing output instead of raw telemetry.
+            raw_ages = {
+                i: max(
+                    0.0, (timestamp_ms - snapshots[i].timestamp_ms) / 1000.0
+                )
+                for i in drone_ids
+            }
             if estimator is not None:
                 ra_states, aoi = _estimated_states_and_aoi(
                     snapshots, estimator, timestamp_ms, estimator_rng
@@ -1712,21 +2303,158 @@ def run_mqtt_loop(
                 }
             else:
                 ra_states = snapshots
-                ages = {
-                    i: max(
-                        0.0, (timestamp_ms - snapshots[i].timestamp_ms) / 1000.0
-                    )
-                    for i in drone_ids
-                }
+                ages = dict(raw_ages)
                 aoi = {
                     (i, j): max(ages[i], ages[j])
                     for i in drone_ids
                     for j in drone_ids
                     if i != j
                 }
+            input_ages = {
+                i: max(raw_ages[i], ages[i])
+                for i in drone_ids
+            }
+            freshness_decision = freshness_gate.assess(
+                required_drones=drone_ids,
+                telemetry_ages_s=input_ages,
+            )
+            if not freshness_decision.fresh:
+                infrastructure_valid = False
+                infrastructure_invalid_reasons.update(freshness_decision.reasons)
+            if freshness_decision.active:
+                fixed_actions.update(
+                    {
+                        i: np.zeros(2, dtype=np.float64)
+                        for i in drone_ids
+                        if i not in failed and i not in overrides.aborted
+                    }
+                )
             ra_states = _propagate_states(ra_states, ages)
-            results = ra.filter(ra_states, nominal, t=t, aoi=aoi)
-            cbf_events += sum(1 for r in results.values() if r.intervened)
+            solve_started = time.perf_counter()
+            if local_ras is None:
+                results = ra.filter(
+                    ra_states,
+                    nominal,
+                    t=t,
+                    aoi=aoi,
+                    fixed_actions=fixed_actions,
+                )
+            else:
+                results = {}
+                for drone in drone_ids:
+                    local_view, local_aoi = _local_ra_view(
+                        observer=drone,
+                        fresh_states=snapshots,
+                        peer_states=ra_states,
+                        now_ms=timestamp_ms,
+                    )
+                    results[drone] = local_ras[drone].filter(
+                        local_view,
+                        nominal,
+                        t=t,
+                        aoi=local_aoi,
+                        fixed_actions=fixed_actions,
+                    )[drone]
+            solve_elapsed_s = time.perf_counter() - solve_started
+            ra_solve_latency_ms.append(solve_elapsed_s * 1000.0)
+            solver_selected_velocity = {
+                i: np.asarray(results[i].safe_action, dtype=np.float64).copy()
+                for i in drone_ids
+            }
+            solver_feasible = {
+                i: results[i].feasible
+                for i in drone_ids
+            }
+            solver_velocity_saturated = {
+                i: bool(results[i].vel_saturated)
+                for i in drone_ids
+            }
+            if c1_px4_supervisor is not None:
+                c1_px4_supervisor.observe_ra(results)
+            if active_coordination_coordinator is not None:
+                observed_decision = active_coordination_coordinator.observe_ra(results)
+                if group_slot_coordinator is not None:
+                    group_slot_decision = observed_decision
+                    coordination_decision = observed_decision
+                elif space_time_reservation_coordinator is not None:
+                    space_time_reservation_decision = observed_decision
+                elif reservation_coordinator is not None:
+                    reservation_decision = observed_decision
+                else:
+                    coordination_decision = observed_decision
+                previous_ra_results = results
+            execution_decision = None
+            if execution_supervisor is not None:
+                supervisor_state = execution_supervisor.assess(
+                    residuals=execution_residuals,
+                    qp_feasible=all(r.feasible is not False for r in results.values()),
+                    solve_elapsed_s=solve_elapsed_s,
+                    telemetry_ages_s=input_ages,
+                    snapshots=snapshots,
+                )
+                execution_decision = ExecutionAssuranceDecision(
+                    active=supervisor_state.active,
+                    reasons=list(supervisor_state.reasons),
+                    residuals={
+                        drone: {
+                            "dt_s": residual.dt_s,
+                            "velocity_mps": residual.velocity_mps,
+                            "position_m": residual.position_m,
+                        }
+                        for drone, residual in supervisor_state.residuals.items()
+                    },
+                    recoverability=[
+                        {
+                            "drones": pair.drones,
+                            "separation_m": pair.separation_m,
+                            "closing_speed_mps": pair.closing_speed_mps,
+                            "required_distance_m": pair.required_distance_m,
+                            "margin_m": pair.margin_m,
+                        }
+                        for pair in supervisor_state.recoverability
+                    ],
+                    backup_drones=list(supervisor_state.backup_drones),
+                    qp_feasible=all(r.feasible is not False for r in results.values()),
+                    solve_elapsed_s=solve_elapsed_s,
+                    telemetry_ages_s=input_ages,
+                    consecutive_bad=supervisor_state.consecutive_bad,
+                    consecutive_clean=supervisor_state.consecutive_clean,
+                    timestamp_ms=timestamp_ms,
+                )
+                if supervisor_state.active and not freshness_decision.active:
+                    backup_candidates = (
+                        supervisor_state.backup_drones or tuple(drone_ids)
+                    )
+                    controlled_drones = tuple(
+                        drone
+                        for drone in backup_candidates
+                        if results[drone].control_authority
+                    )
+                    for i in controlled_drones:
+                        backup = deterministic_backup_velocity(
+                            drone=i,
+                            snapshots=snapshots,
+                            dt_s=period,
+                            a_max=ra.a_max,
+                            v_max=ra.v_max,
+                            retreat_speed_mps=execution_supervisor.config.backup_speed_mps,
+                        )
+                        velocity = np.asarray(
+                            snapshots[i].velocity[:2]
+                            if snapshots[i].velocity is not None
+                            else (0.0, 0.0),
+                            dtype=np.float64,
+                        )
+                        backup_accel = (backup - velocity) / period
+                        results[i] = replace(
+                            results[i],
+                            mode="override",
+                            safe_action=(float(backup[0]), float(backup[1])),
+                            a_safe=(float(backup_accel[0]), float(backup_accel[1])),
+                            intervened=True,
+                        )
+            if freshness_decision.fresh:
+                cbf_events += sum(1 for r in results.values() if r.intervened)
             positions = [snapshots[i].position for i in drone_ids]
             step_min_dist = float("inf")
             for a in range(len(positions)):
@@ -1737,7 +2465,44 @@ def run_mqtt_loop(
                         positions[a][2] - positions[b][2],
                     )
                     step_min_dist = min(step_min_dist, dist)
-                    min_dist = dist if min_dist is None else min(min_dist, dist)
+                    if freshness_decision.fresh:
+                        min_dist = dist if min_dist is None else min(min_dist, dist)
+            if (
+                freshness_decision.fresh
+                and step_min_dist != float("inf")
+                and step_min_dist < 0.25
+            ):
+                collision = True
+            if (
+                freshness_decision.fresh
+                and critical_goal is not None
+                and not critical_reached
+                and (change_step is None or step >= change_step)
+            ):
+                for i in drone_ids:
+                    if i in failed:
+                        continue
+                    if (
+                        np.linalg.norm(
+                            np.asarray(snapshots[i].position[:2])
+                            - np.asarray(critical_goal)
+                        )
+                        < goal_epsilon
+                    ):
+                        critical_reached = True
+            if freshness_decision.fresh and blocked_zone is not None and not zone_crossed:
+                for i in drone_ids:
+                    if _in_zone(snapshots[i].position, blocked_zone):
+                        zone_crossed = True
+            for i in drone_ids:
+                if i in previous_positions:
+                    path_length_m += float(
+                        np.linalg.norm(
+                            np.asarray(snapshots[i].position)
+                            - np.asarray(previous_positions[i])
+                        )
+                    )
+                previous_positions[i] = snapshots[i].position
             if replanner is not None:
                 current_goals = {
                     i: overrides.goal_override.get(i, base_goals[i])
@@ -1749,14 +2514,30 @@ def run_mqtt_loop(
                     results=results,
                     current_goals=current_goals,
                     base_goals=base_goals,
+                    mission_change=(
+                        mission_change if step == change_step else None
+                    ),
                 )
+                if recovery_step is None and replanner.counters.plans_committed:
+                    recovery_step = step
 
             step_min_rho = min(results[i].safety_margin for i in drone_ids)
-            min_rho = step_min_rho if min_rho is None else min(min_rho, step_min_rho)
+            if freshness_decision.fresh:
+                min_rho = (
+                    step_min_rho
+                    if min_rho is None
+                    else min(min_rho, step_min_rho)
+                )
 
             step_rows: dict[int, dict[str, Any]] = {}
+            issued_commands: dict[int, np.ndarray] = {}
+            command_audits: dict[int, dict[str, Any]] = {}
             for i in drone_ids:
                 snap = snapshots[i]
+                command_authority, ra_bypass = _command_authority(
+                    failed_or_aborted=i in failed or i in overrides.aborted
+                )
+                safety_bypass_count += int(ra_bypass)
                 vertical_velocity = max(
                     -MAX_VERTICAL_SPEED_MPS,
                     min(
@@ -1764,25 +2545,102 @@ def run_mqtt_loop(
                         ALTITUDE_HOLD_KP * (CRUISE_ALTITUDE_M - snap.position[2]),
                     ),
                 )
-                command = build_phase5_velocity_command(
-                    drone=i,
-                    safe_velocity=results[i].safe_action,
-                    vertical_velocity=vertical_velocity,
-                    timestamp_ms=timestamp_ms,
-                    priority=overrides.priority.get(i, "normal"),
+                fallback_reason = None
+                if i in failed or i in overrides.aborted:
+                    velocity_2d = np.zeros(2, dtype=np.float64)
+                    fallback_reason = "CONTROL_AUTHORITY_REVOKED"
+                else:
+                    velocity_2d = _velocity_for_command_mode(
+                        results[i], velocity_command_mode
+                    )
+                    if velocity_command_mode == "nominal":
+                        fallback_reason = "NOMINAL_COMMAND_MODE"
+                    elif not np.allclose(
+                        velocity_2d,
+                        solver_selected_velocity[i],
+                        atol=1e-9,
+                        rtol=0.0,
+                    ):
+                        fallback_reason = "EXECUTION_SUPERVISOR"
+                if (
+                    c1_px4_supervisor is not None
+                    and c1_px4_supervisor.brake_latched
+                ):
+                    velocity_2d = np.zeros(2, dtype=np.float64)
+                    fallback_reason = "C1_BRAKE_LATCH"
+                requested_velocity = np.asarray(velocity_2d, dtype=np.float64)
+                command_held = False
+                if freshness_decision.active:
+                    command_authority = "freshness_hold"
+                    fallback_reason = "+".join(freshness_decision.reasons)
+                    command = build_phase5_hold_command(
+                        drone=i,
+                        timestamp_ms=timestamp_ms,
+                        priority="safety",
+                    )
+                else:
+                    command_held = bool(
+                        command_hold_jitter_probability > 0.0
+                        and jitter_rng.random() < command_hold_jitter_probability
+                    )
+                    if command_held:
+                        velocity_2d = previous_issued_velocity[i].copy()
+                        command_hold_jitter_count += 1
+                        fallback_reason = "COMMAND_HOLD_JITTER"
+                    command = build_phase5_velocity_command(
+                        drone=i,
+                        safe_velocity=velocity_2d,
+                        vertical_velocity=vertical_velocity,
+                        timestamp_ms=timestamp_ms,
+                        priority=overrides.priority.get(i, "normal"),
+                    )
+                    previous_issued_velocity[i] = np.asarray(
+                        command["velocity"][:2], dtype=np.float64
+                    )
+                    issued_commands[i] = previous_issued_velocity[i].copy()
+                publish_payload(command)
+                command_scale_s = (
+                    ra.command_feedforward_tau_s
+                    if ra.command_feedforward_tau_s is not None
+                    else (params.degradation_dt if step == 0 else period)
                 )
-                publish(
-                    i,
-                    "velocity",
-                    velocity=tuple(command["velocity"]),
-                    native=False,
-                    priority=command["priority"],
+                reference_velocity = np.asarray(
+                    ra_states[i].velocity[:2]
+                    if ra_states[i].velocity is not None
+                    else (0.0, 0.0),
+                    dtype=np.float64,
                 )
+                command_audit = _audit_published_command(
+                    solver_selected_velocity=solver_selected_velocity[i],
+                    published_command=command,
+                    reference_velocity=reference_velocity,
+                    command_scale_s=command_scale_s,
+                    fallback_reason=fallback_reason,
+                )
+                command_audits[i] = command_audit
+                execution_residual = execution_residuals.get(i)
+                execution_residual_ok = None
+                if (
+                    execution_supervisor is not None
+                    and execution_residual is not None
+                ):
+                    execution_residual_ok = bool(
+                        execution_residual.velocity_mps
+                        <= execution_supervisor.config.velocity_residual_limit_mps
+                        and execution_residual.position_m
+                        <= execution_supervisor.config.position_residual_limit_m
+                    )
                 if trajectory is not None:
                     step_rows[i] = {
                         "pos": list(snap.position),
                         "v_actual": list(snap.velocity or (0.0, 0.0, 0.0)),
-                        "v_safe": list(command["velocity"]),
+                        "v_safe": command.get("velocity"),
+                        "v_requested": [
+                            float(requested_velocity[0]),
+                            float(requested_velocity[1]),
+                            0.0,
+                        ],
+                        "command_hold_jitter_applied": command_held,
                         "v_nom": [
                             float(results[i].nominal_action[0]),
                             float(results[i].nominal_action[1]),
@@ -1797,7 +2655,112 @@ def run_mqtt_loop(
                         "accel_saturated": bool(results[i].accel_saturated),
                         "vel_saturated": bool(results[i].vel_saturated),
                         "feasible": results[i].feasible,
+                        "selected_filter": results[i].selected_filter,
+                        "primary_feasible": results[i].primary_feasible,
+                        "predictive_feasible": results[i].predictive_feasible,
+                        "recovery_active": results[i].recovery_active,
+                        "recovery_reason": results[i].recovery_reason,
+                        "feasibility_reserve": results[i].feasibility_reserve,
+                        "pcbf_status": results[i].pcbf_status,
+                        "pcbf_stage1_status": results[i].pcbf_stage1_status,
+                        "pcbf_stage2_status": results[i].pcbf_stage2_status,
+                        "pcbf_terminal_feasible": results[i].pcbf_terminal_feasible,
+                        "pcbf_value": results[i].pcbf_value,
+                        "pcbf_slack_sum": results[i].pcbf_slack_sum,
+                        "pcbf_tracking_cost": results[i].pcbf_tracking_cost,
+                        "pcbf_max_constraint_violation": results[i].pcbf_max_constraint_violation,
+                        "pcbf_tie_break_applied": results[i].pcbf_tie_break_applied,
+                        "pcbf_warm_start_used": results[i].pcbf_warm_start_used,
+                        "pcbf_fail_closed_reason": results[i].pcbf_fail_closed_reason,
+                        "control_authority": results[i].control_authority,
+                        "fixed_action": (
+                            list(results[i].fixed_action)
+                            if results[i].fixed_action is not None
+                            else None
+                        ),
+                        "command_authority": command_authority,
+                        "ra_bypass": ra_bypass,
+                        "measurement_timestamp_ms": snap.timestamp_ms,
+                        "source_timestamp_us": snap.source_timestamp_us,
+                        "raw_telemetry_age_s": round(raw_ages[i], 4),
+                        "solver_input_age_s": round(ages[i], 4),
+                        "telemetry_fresh": freshness_decision.fresh,
+                        "freshness_gate_active": freshness_decision.active,
+                        "freshness_reason": list(freshness_decision.reasons),
+                        "execution_residual_ok": execution_residual_ok,
+                        "published_min_constraint_slack": None,
+                        "solver_feasible": solver_feasible[i],
+                        **command_audit,
+                        "c1_admission_phase": (
+                            c1_px4_supervisor.phase
+                            if c1_px4_supervisor is not None
+                            else None
+                        ),
+                        "c1_brake_latched": (
+                            c1_px4_supervisor.brake_latched
+                            if c1_px4_supervisor is not None
+                            else False
+                        ),
                     }
+
+            published_accelerations = {
+                drone: np.asarray(
+                    audit["published_effective_acceleration"],
+                    dtype=np.float64,
+                )
+                for drone, audit in command_audits.items()
+                if audit["published_effective_acceleration"] is not None
+            }
+            independently_checked = (
+                local_ras is None
+                and len(published_accelerations) == len(drone_ids)
+            )
+            if independently_checked:
+                joint_constraint_ok, published_min_constraint_slack = (
+                    ra.audit_published_accelerations(published_accelerations)
+                )
+            else:
+                joint_constraint_ok = None
+                published_min_constraint_slack = None
+            if joint_constraint_ok is None:
+                joint_constraint_ok = _joint_published_constraint_status(
+                    command_audits=command_audits,
+                    solver_feasible=solver_feasible,
+                    solver_velocity_saturated=solver_velocity_saturated,
+                )
+            joint_command_matches = all(
+                audit["published_command_matches_selected"]
+                for audit in command_audits.values()
+            )
+            published_command_mismatch_count += sum(
+                not audit["published_command_matches_selected"]
+                for audit in command_audits.values()
+            )
+            published_command_constraint_unknown_count += (
+                len(drone_ids) if joint_constraint_ok is None else 0
+            )
+            published_command_constraint_failure_count += (
+                len(drone_ids) if joint_constraint_ok is False else 0
+            )
+            published_constraint_failure_while_solver_feasible_count += (
+                len(drone_ids)
+                if joint_constraint_ok is False
+                and _joint_solver_feasible(solver_feasible)
+                else 0
+            )
+            for row in step_rows.values():
+                row["all_published_commands_match_selected"] = joint_command_matches
+                row["published_command_constraint_ok"] = joint_constraint_ok
+                row["published_min_constraint_slack"] = (
+                    published_min_constraint_slack
+                )
+
+            if execution_supervisor is not None:
+                execution_supervisor.record_commands(
+                    snapshots,
+                    issued_commands,
+                    now_t_s=t,
+                )
 
             if trajectory is not None:
                 traj_rows.append(
@@ -1809,7 +2772,43 @@ def run_mqtt_loop(
                             step_min_dist if step_min_dist != float("inf") else 0.0,
                             4,
                         ),
+                        "ra_solve_latency_ms": solve_elapsed_s * 1000.0,
                         "drones": step_rows,
+                        "input_freshness": {
+                            "fresh": freshness_decision.fresh,
+                            "active": freshness_decision.active,
+                            "reasons": list(freshness_decision.reasons),
+                            "stale_drones": list(freshness_decision.stale_drones),
+                            "missing_drones": list(freshness_decision.missing_drones),
+                            "consecutive_fresh": freshness_decision.consecutive_fresh,
+                            "raw_telemetry_ages_s": raw_ages,
+                            "solver_input_ages_s": ages,
+                        },
+                        "execution_assurance": (
+                            execution_decision.model_dump(mode="json")
+                            if execution_decision is not None
+                            else None
+                        ),
+                        "coordination_admission": (
+                            coordination_decision.model_dump(mode="json")
+                            if coordination_decision is not None
+                            else None
+                        ),
+                        "recoverability_admission": (
+                            recoverability_admission_coordinator.summary()
+                            if recoverability_admission_coordinator is not None
+                            else None
+                        ),
+                        "coordination_reservation": (
+                            reservation_decision.model_dump(mode="json")
+                            if reservation_decision is not None
+                            else None
+                        ),
+                        "coordination_space_time_reservation": (
+                            space_time_reservation_decision.model_dump(mode="json")
+                            if space_time_reservation_decision is not None
+                            else None
+                        ),
                     }
                 )
             step += 1
@@ -1830,9 +2829,10 @@ def run_mqtt_loop(
                 + "\n",
                 encoding="utf-8",
             )
-        for i in drone_ids:
-            publish(i, "land", native=True)
-        time.sleep(2.0)
+        if land_at_end:
+            for i in drone_ids:
+                publish(i, "land", native=True)
+            time.sleep(2.0)
     finally:
         client.loop_stop()
         client.disconnect()
@@ -1842,13 +2842,97 @@ def run_mqtt_loop(
     return {
         "steps": step,
         "mode": mode,
+        "observation_mode": observation_mode,
         "drone_ids": drone_ids,
         "cbf_events": cbf_events,
         "min_distance_m": round(min_dist, 4) if min_dist is not None else None,
         "min_rho": round(min_rho, 6) if min_rho is not None else None,
+        "failed_drone": failed_drone,
+        "critical_reached": critical_reached,
+        "zone_crossed": zone_crossed,
+        "collision": collision,
+        "recovery_step": recovery_step,
+        "recovery_time_s": (
+            round((recovery_step - change_step) * period, 6)
+            if recovery_step is not None and change_step is not None
+            else None
+        ),
+        "path_length_m": round(path_length_m, 6),
+        "ra_solve_latency_ms": ra_solve_latency_ms,
+        "ra_solve_latency_summary_ms": _latency_summary_ms(
+            ra_solve_latency_ms, deadline_ms=period * 1000.0
+        ),
+        "command_hold_jitter_probability": command_hold_jitter_probability,
+        "command_hold_jitter_count": command_hold_jitter_count,
+        "safety_bypass_count": safety_bypass_count,
+        "published_command_mismatch_count": published_command_mismatch_count,
+        "published_command_constraint_unknown_count": published_command_constraint_unknown_count,
+        "published_command_constraint_failure_count": published_command_constraint_failure_count,
+        "published_constraint_failure_while_solver_feasible_count": (
+            published_constraint_failure_while_solver_feasible_count
+        ),
+        "infrastructure_valid": infrastructure_valid,
+        "infrastructure_invalid_reasons": sorted(infrastructure_invalid_reasons),
+        "freshness_gate": {
+            "max_age_s": freshness_gate.config.max_age_s,
+            "release_samples": freshness_gate.config.release_samples,
+            "trip_count": freshness_gate.trip_count,
+            "release_count": freshness_gate.release_count,
+            "active_steps": freshness_gate.active_steps,
+            "stale_steps": freshness_gate.stale_steps,
+            "max_observed_age_s": freshness_gate.max_observed_age_s,
+            "reason_counts": freshness_gate.reason_counts,
+            "active_at_end": freshness_gate.active,
+        },
+        "hocbf_primary_infeasible_steps": ra.hocbf_primary_infeasible_count,
+        "hocbf_predictive_infeasible_steps": ra.hocbf_predictive_infeasible_count,
+        "hocbf_recovery_infeasible_steps": ra.hocbf_recovery_infeasible_count,
+        "hocbf_recovery_steps": ra.hocbf_recovery_steps,
+        "hocbf_recovery_entries": ra.hocbf_recovery_entries,
         "final_positions": final_positions,
         "trajectory": str(trajectory) if trajectory is not None else None,
         "reset_elapsed_s": round(reset_elapsed_s, 3) if reset_elapsed_s is not None else None,
+        "execution_supervisor": (
+            {
+                "trip_count": execution_supervisor.trip_count,
+                "release_count": execution_supervisor.release_count,
+                "active_steps": execution_supervisor.active_steps,
+                "reason_counts": execution_supervisor.reason_counts,
+                "active_at_end": execution_supervisor.active,
+            }
+            if execution_supervisor is not None
+            else None
+        ),
+        "c1_px4_supervisor": (
+            c1_px4_supervisor.summary()
+            if c1_px4_supervisor is not None
+            else None
+        ),
+        "c3_admission": (
+            admission_coordinator.summary()
+            if admission_coordinator is not None
+            else None
+        ),
+        "c3_reservation": (
+            reservation_coordinator.summary()
+            if reservation_coordinator is not None
+            else None
+        ),
+        "c3_space_time_reservation": (
+            space_time_reservation_coordinator.summary()
+            if space_time_reservation_coordinator is not None
+            else None
+        ),
+        "c3_group_slot": (
+            group_slot_coordinator.summary()
+            if group_slot_coordinator is not None
+            else None
+        ),
+        "recoverability_admission": (
+            recoverability_admission_coordinator.summary()
+            if recoverability_admission_coordinator is not None
+            else None
+        ),
         "counters": (
             {
                 "triggers": replanner.counters.triggers,
