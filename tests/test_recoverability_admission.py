@@ -46,7 +46,6 @@ class RecoverabilityAdmissionTest(unittest.TestCase):
         summary = coordinator.summary()
         self.assertEqual(summary["admission_count"], 1)
         self.assertEqual(summary["plans_committed"], 1)
-        self.assertEqual(summary["unsafe_commit_count"], 0)
         self.assertGreaterEqual(
             summary["predicted_min_clearance_m"],
             summary["clearance_threshold_m"],

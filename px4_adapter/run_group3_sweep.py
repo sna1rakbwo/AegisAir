@@ -27,7 +27,7 @@ def existing() -> set[tuple[str, int]]:
     if not SWEEP_LOG.exists():
         return set()
     seen: set[tuple[str, int]] = set()
-    for line in SWEEP_LOG.read_text().splitlines():
+    for line in SWEEP_LOG.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue

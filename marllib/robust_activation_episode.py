@@ -148,7 +148,7 @@ def main() -> int:
     parser.add_argument("--steps", type=int, default=80)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
-    data = json.loads(args.search.read_text())
+    data = json.loads(args.search.read_text(encoding="utf-8"))
     case = data["cases"][args.case_index]
     common = dict(
         case=case, steps=args.steps, dt=float(data["dt"]), gamma=float(data["gamma"]),

@@ -237,6 +237,8 @@ class PCBFTest(unittest.TestCase):
         self.assertEqual(kwargs["sampled_data_method"], "pcbf")
         self.assertEqual(kwargs["pcbf_horizon"], 24)
         self.assertEqual(kwargs["pcbf_multistart_count"], 3)
+        self.assertEqual(kwargs["ra_params"].v_max, 1.5)
+        self.assertEqual(kwargs["ra_params"].a_max, 2.0)
 
 
 if __name__ == "__main__":

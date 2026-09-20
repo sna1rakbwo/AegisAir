@@ -147,6 +147,25 @@ class HocbfQpTest(unittest.TestCase):
         )
         self.assertLess(reserve, 0.0)
 
+    def test_coincident_pair_fails_closed_and_reserve_is_negative_infinite(self) -> None:
+        common = dict(
+            a_nom={0: np.zeros(2), 1: np.zeros(2)},
+            positions={0: np.zeros(2), 1: np.zeros(2)},
+            velocities={0: np.array([1.0, 0.0]), 1: np.array([-1.0, 0.0])},
+            d_safe={(0, 1): 1.0},
+            k1=4.0,
+            k2=4.0,
+            a_max=2.0,
+        )
+        _, feasible, _ = solve_acceleration_qp(**common, infeasible_fallback="max_brake")
+        self.assertFalse(feasible)
+        self.assertEqual(
+            minimum_acceleration_box_reserve(
+                **{key: value for key, value in common.items() if key != "a_nom"}
+            ),
+            float("-inf"),
+        )
+
     def test_sampled_data_qp_lag_alpha_reduces_responsiveness(self) -> None:
         a_nom = {0: np.array([0.0, 0.0]), 1: np.array([0.0, 0.0])}
         positions = {0: np.array([-2.0, 0.0]), 1: np.array([2.0, 0.0])}
@@ -164,7 +183,7 @@ class HocbfQpTest(unittest.TestCase):
             a_max=2.0,
             alpha=1.0,
         )
-        a_lag, feasible_lag, _ = solve_sampled_data_qp(
+        a_lag, feasible_lag, iterations_lag = solve_sampled_data_qp(
             a_nom=a_nom,
             positions=positions,
             velocities=velocities,
@@ -177,6 +196,7 @@ class HocbfQpTest(unittest.TestCase):
         )
         self.assertTrue(feasible_instant)
         self.assertTrue(feasible_lag)
+        self.assertLess(iterations_lag, 3000)
         # The lag model must not be less conservative than the instant model.
         self.assertLessEqual(float(a_lag[0][0]), float(a_instant[0][0]) + 1e-6)
 

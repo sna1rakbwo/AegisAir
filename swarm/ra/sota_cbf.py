@@ -18,6 +18,24 @@ from swarm.ra.projection import (
 )
 
 
+def _projection_residual(
+    x: np.ndarray,
+    halfspaces: list[tuple[np.ndarray, float]],
+    a_max: float,
+    fixed_mask: np.ndarray,
+    fixed_values: np.ndarray,
+) -> float:
+    """Maximum box, fixed-input, or half-space violation."""
+    box_violation = float(np.max(np.abs(x[~fixed_mask]) - a_max, initial=-np.inf))
+    fixed_violation = float(
+        np.max(np.abs(x[fixed_mask] - fixed_values[fixed_mask]), initial=0.0)
+    )
+    halfspace_violation = max(
+        (b - float(np.dot(c, x)) for c, b in halfspaces), default=-np.inf
+    )
+    return max(0.0, box_violation, fixed_violation, halfspace_violation)
+
+
 def _solve_projection_qp(
     *,
     x_nom: np.ndarray,
@@ -76,13 +94,12 @@ def _solve_projection_qp(
         if (
             float(np.linalg.norm(x - previous)) <= 1e-9
             and correction_change <= 1e-9
+            and _projection_residual(
+                x, halfspaces, a_max, fixed_mask, fixed_values
+            ) <= 1e-6
         ):
             break
-    feasible = bool(np.all(np.abs(x[~fixed_mask]) <= a_max + 1e-6))
-    feasible = feasible and bool(
-        np.allclose(x[fixed_mask], fixed_values[fixed_mask], atol=1e-6, rtol=0.0)
-    )
-    feasible = feasible and all(float(np.dot(c, x)) >= b - 1e-6 for c, b in halfspaces)
+    feasible = _projection_residual(x, halfspaces, a_max, fixed_mask, fixed_values) <= 1e-6
     return x, feasible, used
 
 
@@ -189,6 +206,11 @@ def solve_zocbf_qp(
         r = np.asarray(positions[i]) - np.asarray(positions[j])
         v = np.asarray(velocities[i]) - np.asarray(velocities[j])
         distance = float(np.linalg.norm(r))
+        if distance <= 1e-9:
+            # No instantaneous acceleration can restore a separation direction.
+            # Make the numerical infeasibility explicit so the caller fails closed.
+            halfspaces.append((np.zeros_like(x_nom), 1.0))
+            continue
         n = r / distance if distance > 1e-9 else np.array([1.0, 0.0])
         h_now = float(np.dot(n, r)) - distance_now
         c = np.zeros_like(x_nom)

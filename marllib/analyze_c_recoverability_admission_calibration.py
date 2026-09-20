@@ -84,7 +84,6 @@ def analyze(manifest: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, A
                 and summary.get("admission_count") == 1
                 and summary.get("rejection_count") == 0
                 and summary.get("plans_committed") == 1
-                and summary.get("unsafe_commit_count") == 0
                 and summary.get("decision_latency_ms", float("inf")) < 50.0
                 and _post_failure_critical_reached(row)
                 and summary.get("completed")
@@ -95,7 +94,6 @@ def analyze(manifest: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, A
                 and summary.get("admission_count") == 0
                 and summary.get("rejection_count") == 1
                 and summary.get("plans_committed") == 0
-                and summary.get("unsafe_commit_count") == 0
                 and summary.get("decision_latency_ms", float("inf")) < 50.0
                 and not _post_failure_critical_reached(row)
                 and row["trajectory_audit"]["hold_goal_frozen"]

@@ -16,7 +16,12 @@ from swarm.ra.margins import (
     dynamic_safety_boundary,
 )
 from swarm.ra.runtime_assurance import RuntimeAssurance
-from swarm.ra.predictor import closest_point_of_approach, predicted_distance, predicted_min_margin
+from swarm.ra.predictor import (
+    PredictiveMonitor,
+    closest_point_of_approach,
+    predicted_distance,
+    predicted_min_margin,
+)
 from swarm.safety import DroneSnapshot
 
 
@@ -54,6 +59,15 @@ class MarginTest(unittest.TestCase):
         tracker.update(1.0, 0.0)
         g = tracker.update(0.5, 0.1)
         self.assertGreater(g, 0.0)
+
+
+class PredictiveMonitorTest(unittest.TestCase):
+    def test_filtered_ca_uses_observed_acceleration_direction(self) -> None:
+        monitor = PredictiveMonitor()
+        monitor.update_acceleration(7, (0.0, 0.0, 0.0), 0.1)
+        monitor.update_acceleration(7, (0.0, 1.0, 0.0), 0.1)
+        direction = monitor._acc_filter(7).direction
+        np.testing.assert_allclose(direction, (0.0, 1.0, 0.0), atol=1e-12)
 
 
 class CbfTest(unittest.TestCase):

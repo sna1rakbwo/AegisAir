@@ -160,7 +160,6 @@ class RecoverabilityAdmissionCoordinator:
         self.admission_count = 0
         self.rejection_count = 0
         self.plans_committed = 0
-        self.unsafe_commit_count = 0
         self.candidate_count = 0
         self.predicted_min_clearance_m: float | None = None
         self.geometric_min_clearance_m: float | None = None
@@ -465,15 +464,6 @@ class RecoverabilityAdmissionCoordinator:
         self.predicted_min_clearance_m = -negative_clearance
         self.predicted_completion_time_s = rollout.completion_time_s
         self.predicted_terminal_speed_mps = rollout.terminal_speed_mps
-        if (
-            self.predicted_min_clearance_m + 1e-9
-            < self.config.effective_clearance_m
-        ):
-            self.unsafe_commit_count += 1
-            self.state = "rejected_hold"
-            self.rejection_count += 1
-            self.rejection_reason = "internal_clearance_guard"
-            return
         self.route = [
             (float(point[0]), float(point[1]), float(altitude))
             for point in selected[1:]
@@ -562,7 +552,6 @@ class RecoverabilityAdmissionCoordinator:
             "admission_count": self.admission_count,
             "rejection_count": self.rejection_count,
             "plans_committed": self.plans_committed,
-            "unsafe_commit_count": self.unsafe_commit_count,
             "predicted_min_clearance_m": self.predicted_min_clearance_m,
             "clearance_threshold_m": self.config.clearance_m,
             "effective_clearance_threshold_m": self.config.effective_clearance_m,
@@ -637,5 +626,4 @@ class RAOnlySafeHoldCoordinator:
             "plans_committed": 0,
             "admission_count": 0,
             "rejection_count": 0,
-            "unsafe_commit_count": 0,
         }

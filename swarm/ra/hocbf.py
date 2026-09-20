@@ -133,6 +133,24 @@ def _fixed_coordinates(
     return mask, values, fixed
 
 
+def _projection_residual(
+    x: np.ndarray,
+    halfspaces: list[tuple[np.ndarray, float]],
+    a_max: float,
+    fixed_mask: np.ndarray,
+    fixed_values: np.ndarray,
+) -> float:
+    """Return the maximum primal violation of the projected QP."""
+    box_violation = float(np.max(np.abs(x[~fixed_mask]) - a_max, initial=-np.inf))
+    fixed_violation = float(
+        np.max(np.abs(x[fixed_mask] - fixed_values[fixed_mask]), initial=0.0)
+    )
+    halfspace_violation = max(
+        (b - float(np.dot(c, x)) for c, b in halfspaces), default=-np.inf
+    )
+    return max(0.0, box_violation, fixed_violation, halfspace_violation)
+
+
 def _fallback_accelerations(
     *,
     x: np.ndarray,
@@ -195,6 +213,11 @@ def solve_acceleration_qp(
 
     halfspaces: list[tuple[np.ndarray, float]] = []
     for (i, j), s in d_safe.items():
+        if float(np.linalg.norm(np.asarray(positions[i]) - np.asarray(positions[j]))) <= 1e-9:
+            # A coincident pair has no separating control direction in this
+            # relative-degree-two constraint. Fail closed explicitly.
+            halfspaces.append((np.zeros_like(x), 1.0))
+            continue
         c, b = _pair_constraint(
             i=index[i],
             j=index[j],
@@ -265,20 +288,15 @@ def solve_acceleration_qp(
         if (
             float(np.linalg.norm(x0 - previous)) <= tol
             and correction_change <= tol
+            and _projection_residual(
+                x0, halfspaces, a_max, fixed_mask, fixed_values
+            ) <= 1e-6
         ):
             break
 
-    feasible = True
-    box_ok = np.all(np.abs(x0[~fixed_mask]) <= a_max + 1e-6)
-    fixed_ok = np.allclose(
-        x0[fixed_mask], fixed_values[fixed_mask], atol=1e-6, rtol=0.0
-    )
-    for c, b in halfspaces:
-        if float(np.dot(c, x0)) < b - 1e-6:
-            feasible = False
-            break
-    if not box_ok or not fixed_ok:
-        feasible = False
+    feasible = _projection_residual(
+        x0, halfspaces, a_max, fixed_mask, fixed_values
+    ) <= 1e-6
 
     a_safe = _fallback_accelerations(
         x=x0,
@@ -318,6 +336,9 @@ def minimum_acceleration_box_reserve(
     )
     reserves = []
     for (i, j), safe_distance in d_safe.items():
+        if float(np.linalg.norm(np.asarray(positions[i]) - np.asarray(positions[j]))) <= 1e-9:
+            reserves.append(float("-inf"))
+            continue
         c, b = _pair_constraint(
             i=index[i],
             j=index[j],
@@ -405,6 +426,9 @@ def solve_robust_sampled_data_qp(
             velocities[j], dtype=np.float64
         )
         dist = float(np.linalg.norm(r))
+        if dist <= 1e-9:
+            halfspaces.append((np.zeros_like(x), 1.0))
+            continue
         n = r / dist if dist > 1e-9 else np.array([1.0, 0.0])
         d_now = s_now[(i, j)]
         d_next = s_next[(i, j)]
@@ -427,7 +451,10 @@ def solve_robust_sampled_data_qp(
 
     corrections = [np.zeros_like(x) for _ in range(len(halfspaces) + 1)]
     x0 = x.copy()
-    for _ in range(max_iters):
+    iterations = 0
+    for iterations in range(1, max_iters + 1):
+        previous = x0.copy()
+        correction_change = 0.0
         cur = x0
         for idx in range(len(halfspaces) + 1):
             y = cur + corrections[idx]
@@ -441,18 +468,26 @@ def solve_robust_sampled_data_qp(
             else:
                 c, b = halfspaces[idx - 1]
                 proj = _project_halfspace(y, c, b)
-            corrections[idx] = y - proj
+            correction = y - proj
+            correction_change = max(
+                correction_change,
+                float(np.linalg.norm(correction - corrections[idx])),
+            )
+            corrections[idx] = correction
             cur = proj
         x0 = cur
-
-    feasible = bool(np.all(np.abs(x0[~fixed_mask]) <= a_max + 1e-6))
-    feasible = feasible and bool(
-        np.allclose(x0[fixed_mask], fixed_values[fixed_mask], atol=1e-6, rtol=0.0)
-    )
-    for c, b in halfspaces:
-        if float(np.dot(c, x0)) < b - 1e-6:
-            feasible = False
+        if (
+            float(np.linalg.norm(x0 - previous)) <= 1e-7
+            and correction_change <= 1e-7
+            and _projection_residual(
+                x0, halfspaces, a_max, fixed_mask, fixed_values
+            ) <= 1e-6
+        ):
             break
+
+    feasible = _projection_residual(
+        x0, halfspaces, a_max, fixed_mask, fixed_values
+    ) <= 1e-6
 
     a_safe = _fallback_accelerations(
         x=x0,
@@ -463,7 +498,7 @@ def solve_robust_sampled_data_qp(
         infeasible_fallback="velocity_cancel",
         fixed_accelerations=fixed,
     )
-    return a_safe, feasible, max_iters
+    return a_safe, feasible, iterations
 
 
 def solve_sampled_data_qp(
@@ -513,6 +548,9 @@ def solve_sampled_data_qp(
         v = np.asarray(velocities[i], dtype=np.float64) - np.asarray(
             velocities[j], dtype=np.float64
         )
+        if float(np.linalg.norm(r)) <= 1e-9:
+            halfspaces.append((np.zeros_like(x), 1.0))
+            continue
         a_rel_nom = np.asarray(a_nom[i], dtype=np.float64) - np.asarray(
             a_nom[j], dtype=np.float64
         )
@@ -529,7 +567,10 @@ def solve_sampled_data_qp(
 
     corrections = [np.zeros_like(x) for _ in range(len(halfspaces) + 1)]
     x0 = x.copy()
-    for _ in range(max_iters):
+    iterations = 0
+    for iterations in range(1, max_iters + 1):
+        previous = x0.copy()
+        correction_change = 0.0
         cur = x0
         for idx in range(len(halfspaces) + 1):
             y = cur + corrections[idx]
@@ -543,18 +584,26 @@ def solve_sampled_data_qp(
             else:
                 c, b = halfspaces[idx - 1]
                 proj = _project_halfspace(y, c, b)
-            corrections[idx] = y - proj
+            correction = y - proj
+            correction_change = max(
+                correction_change,
+                float(np.linalg.norm(correction - corrections[idx])),
+            )
+            corrections[idx] = correction
             cur = proj
         x0 = cur
-
-    feasible = bool(np.all(np.abs(x0[~fixed_mask]) <= a_max + 1e-6))
-    feasible = feasible and bool(
-        np.allclose(x0[fixed_mask], fixed_values[fixed_mask], atol=1e-6, rtol=0.0)
-    )
-    for c, b in halfspaces:
-        if float(np.dot(c, x0)) < b - 1e-6:
-            feasible = False
+        if (
+            float(np.linalg.norm(x0 - previous)) <= 1e-7
+            and correction_change <= 1e-7
+            and _projection_residual(
+                x0, halfspaces, a_max, fixed_mask, fixed_values
+            ) <= 1e-6
+        ):
             break
+
+    feasible = _projection_residual(
+        x0, halfspaces, a_max, fixed_mask, fixed_values
+    ) <= 1e-6
 
     a_safe = _fallback_accelerations(
         x=x0,
@@ -565,4 +614,4 @@ def solve_sampled_data_qp(
         infeasible_fallback="velocity_cancel",
         fixed_accelerations=fixed,
     )
-    return a_safe, feasible, max_iters
+    return a_safe, feasible, iterations

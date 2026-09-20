@@ -274,7 +274,6 @@ class RecoverabilityAdmissionProtocolTest(unittest.TestCase):
                         "admission_count": int(admitted),
                         "rejection_count": int(not admitted),
                         "plans_committed": int(admitted),
-                        "unsafe_commit_count": 0,
                         "decision_latency_ms": 1.0,
                         "completed": admitted,
                     },

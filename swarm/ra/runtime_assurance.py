@@ -1351,8 +1351,10 @@ def _projected_sigma(snapshot, direction: np.ndarray, default: float) -> float:
         return default
     P = np.asarray(cov, dtype=np.float64).reshape(2, 2)
     variance = float(direction @ P @ direction)
-    if variance <= 0.0:
-        return 0.0
+    # Runtime assurance must not reduce its uncertainty margin because an
+    # upstream estimator supplied an invalid, negative, or zero covariance.
+    if not np.isfinite(variance) or variance <= 0.0:
+        return default
     return float(np.sqrt(variance))
 
 

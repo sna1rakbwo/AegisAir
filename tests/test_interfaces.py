@@ -42,7 +42,7 @@ class InterfaceValidationTest(unittest.TestCase):
     def test_example_payloads_validate(self) -> None:
         for name, model in MODELS.items():
             path = EXAMPLES / f"{name}.json"
-            payload = json.loads(path.read_text())
+            payload = json.loads(path.read_text(encoding="utf-8"))
             with self.subTest(name=name):
                 instance = model.model_validate(payload)
                 self.assertIsNotNone(instance)

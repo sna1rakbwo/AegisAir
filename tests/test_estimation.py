@@ -98,6 +98,12 @@ class CovarianceProjectionTest(unittest.TestCase):
         sigma = _projected_sigma(snapshot, np.array([1.0, 0.0]), 0.1)
         self.assertAlmostEqual(sigma, 0.1)
 
+    def test_invalid_covariance_cannot_remove_uncertainty_margin(self) -> None:
+        zero = self._WithCov((0.0, 0.0, 0.0, 0.0))
+        negative = self._WithCov((-1.0, 0.0, 0.0, 1.0))
+        self.assertAlmostEqual(_projected_sigma(zero, np.array([1.0, 0.0]), 0.1), 0.1)
+        self.assertAlmostEqual(_projected_sigma(negative, np.array([1.0, 0.0]), 0.1), 0.1)
+
     def test_pair_sigmas_uses_line_of_sight(self) -> None:
         ra = RuntimeAssurance()
         a = EstimatedState(

@@ -91,6 +91,7 @@ class AccelerationFilter:
         self.lambda_a = lambda_a
         self.ema = 0.0
         self.prev_velocity: Vector3 | None = None
+        self.direction: Vector3 = (0.0, 0.0, 0.0)
         self.recent: list[float] = []
 
     def update(self, velocity: Vector3, dt: float) -> float:
@@ -100,6 +101,12 @@ class AccelerationFilter:
         else:
             delta = subtract(velocity, self.prev_velocity)
             a = norm(delta) / dt
+            if a > 1e-12:
+                self.direction = (
+                    delta[0] / (a * dt),
+                    delta[1] / (a * dt),
+                    delta[2] / (a * dt),
+                )
         self.ema = self.lambda_a * self.ema + (1.0 - self.lambda_a) * a
         self.prev_velocity = velocity
         self.recent.append(a)
@@ -167,8 +174,8 @@ class PredictiveMonitor:
         """Return the worst predicted margin, time of that margin, and TTSB."""
         a_i = self._acc_filter(agent_i).ema if self.use_ca else 0.0
         a_j = self._acc_filter(agent_j).ema if self.use_ca else 0.0
-        dir_i = (1.0, 0.0, 0.0)
-        dir_j = (1.0, 0.0, 0.0)
+        dir_i = self._acc_filter(agent_i).direction if self.use_ca else (0.0, 0.0, 0.0)
+        dir_j = self._acc_filter(agent_j).direction if self.use_ca else (0.0, 0.0, 0.0)
 
         best_rho = float("inf")
         best_tau = 0.0

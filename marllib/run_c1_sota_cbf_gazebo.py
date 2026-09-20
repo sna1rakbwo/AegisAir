@@ -52,7 +52,11 @@ def _method_kwargs(method: str, config: dict, tau_command: float) -> dict:
         a_max=2.0,
         kv=2.0,
         observation_mode=OBSERVATION_SHARED_CURRENT,
-        ra_params=RuntimeAssuranceParams(degradation_dt=0.05),
+        ra_params=RuntimeAssuranceParams(
+            degradation_dt=0.05,
+            v_max=1.5,
+            a_max=2.0,
+        ),
         constraint_boundary=config["constraint_boundary"],
     )
     if method == "VELOCITY_CBF":

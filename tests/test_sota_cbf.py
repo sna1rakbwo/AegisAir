@@ -120,6 +120,23 @@ class SotaCbfTest(unittest.TestCase):
         )
         self.assertFalse(feasible)
 
+    def test_zocbf_coincident_pair_fails_closed(self):
+        dt = 0.05
+        beta = dt - 0.7 * (1.0 - np.exp(-dt / 0.7))
+        _, feasible, _ = solve_zocbf_qp(
+            a_nom=self.nominal,
+            positions={2: np.zeros(2), 3: np.zeros(2)},
+            velocities=self.velocities,
+            s_now={(2, 3): 1.5},
+            s_next={(2, 3): 1.5},
+            dt=dt,
+            gamma=0.1,
+            delta=0.0,
+            a_max=3.0,
+            beta={2: beta, 3: beta},
+        )
+        self.assertFalse(feasible)
+
     def test_zocbf_max_brake_fallback_uses_full_shared_budget(self):
         dt = 0.05
         beta = dt - 0.7 * (1.0 - np.exp(-dt / 0.7))
